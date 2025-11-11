@@ -97,6 +97,61 @@ def _calendar_matches_selection(selection: Iterable[str], *candidates: Optional[
     return False
 
 
+def _fetch_caldav_occurrences(
+    calendar: Any,
+    range_start: dt.datetime,
+    range_end: dt.datetime,
+) -> Iterable[Any]:
+    def _strip_timezone(value: dt.datetime) -> dt.datetime:
+        if value.tzinfo is None:
+            return value
+        return value.replace(tzinfo=None)
+
+    attempts: List[Tuple[dt.datetime, dt.datetime, Optional[bool]]] = [
+        (range_start, range_end, True),
+        (range_start, range_end, False),
+    ]
+
+    naive_start = _strip_timezone(range_start)
+    naive_end = _strip_timezone(range_end)
+    if naive_start is not range_start or naive_end is not range_end:
+        attempts.extend(
+            [
+                (naive_start, naive_end, True),
+                (naive_start, naive_end, False),
+            ]
+        )
+
+    last_error: Optional[Exception] = None
+    date_search = getattr(calendar, "date_search", None)
+    if callable(date_search):
+        for start, end, expand in attempts:
+            try:
+                if expand is None:
+                    occurrences = date_search(start, end)
+                else:
+                    occurrences = date_search(start, end, expand=expand)
+            except Exception as exc:  # pragma: no cover - dependent on remote server
+                last_error = exc
+                continue
+            if occurrences is not None:
+                return occurrences
+
+    events_method = getattr(calendar, "events", None)
+    if callable(events_method):
+        try:
+            occurrences = events_method()
+        except Exception as exc:  # pragma: no cover - dependent on remote server
+            last_error = exc
+        else:
+            if occurrences is not None:
+                return occurrences
+
+    if last_error is not None:
+        raise last_error
+    return []
+
+
 def _coerce_ical_datetime(value: Any) -> Optional[dt.datetime]:
     if value is None:
         return None
@@ -189,9 +244,13 @@ def sync_caldav_events(
         if not _calendar_matches_selection(selected, calendar_id, calendar_name):
             continue
         try:
-            occurrences = calendar.date_search(range_start, range_end, expand=True)
-        except Exception:  # pragma: no cover - ignore calendar specific issues
-            continue
+            occurrences = _fetch_caldav_occurrences(calendar, range_start, range_end)
+        except Exception as exc:  # pragma: no cover - propagate as HTTP error
+            identifier = calendar_name or calendar_id or "unbekannt"
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"CalDAV-Kalender '{identifier}' konnte nicht synchronisiert werden",
+            ) from exc
         for occurrence in occurrences:
             component = getattr(occurrence, "icalendar_component", None)
             vevent = None
@@ -214,6 +273,8 @@ def sync_caldav_events(
             if dtend is None:
                 dtend = dtstart + dt.timedelta(hours=1)
             end_utc = _ensure_utc(dtend)
+            if start_utc < range_start or start_utc > range_end:
+                continue
             key = (str(summary or ""), start_utc, end_utc)
             if key in existing:
                 continue
