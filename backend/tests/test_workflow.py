@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -40,6 +41,22 @@ def test_start_pause_resume_stop_flow(client: TestClient):
     summaries = summary_resp.json()
     assert len(summaries) == 1
     assert "work_seconds" in summaries[0]
+
+
+def test_start_with_custom_start_time(client: TestClient):
+    custom_start = "2024-06-02T07:45:00"
+    start_resp = client.post("/work/start", json={"start_time": custom_start})
+    assert start_resp.status_code == 201
+    data = start_resp.json()
+    returned = dt.datetime.fromisoformat(data["start_time"])
+    berlin = ZoneInfo("Europe/Berlin")
+    expected_local = dt.datetime.fromisoformat(custom_start).replace(tzinfo=berlin)
+    assert returned.astimezone(berlin).replace(tzinfo=None) == expected_local.replace(tzinfo=None)
+
+    stop_resp = client.post("/work/stop", json={})
+    assert stop_resp.status_code == 200
+    stopped = stop_resp.json()
+    assert stopped["start_time"] == data["start_time"]
 
 
 def test_leave_creation_and_filter(client: TestClient):
@@ -125,6 +142,52 @@ def test_manual_session_entry(client: TestClient):
     assert day_resp.status_code == 200
     entries = day_resp.json()
     assert any(item["comment"] == "Nachtrag" for item in entries)
+
+
+def test_session_edit_and_delete(client: TestClient):
+    create_resp = client.post(
+        "/work/manual",
+        json={
+            "start_time": "2024-06-01T09:00:00",
+            "end_time": "2024-06-01T11:00:00",
+            "project": "Initial",
+            "comment": "Erster Eintrag",
+            "tags": ["alpha"],
+        },
+    )
+    assert create_resp.status_code == 201
+    session_id = create_resp.json()["id"]
+
+    update_resp = client.patch(
+        f"/work/session/{session_id}",
+        json={
+            "start_time": "2024-06-01T08:00:00",
+            "end_time": "2024-06-01T12:30:00",
+            "comment": "Aktualisiert",
+            "project": "Projekt X",
+            "tags": ["beta", "delta"],
+        },
+    )
+    assert update_resp.status_code == 200
+    updated = update_resp.json()
+    assert updated["comment"] == "Aktualisiert"
+    assert updated["project"] == "Projekt X"
+    assert updated["tags"] == ["beta", "delta"]
+    assert updated["total_seconds"] == 16200
+
+    summary_resp = client.get("/days", params={"from_date": "2024-06-01", "to_date": "2024-06-01"})
+    assert summary_resp.status_code == 200
+    summary = summary_resp.json()[0]
+    assert summary["work_seconds"] == 16200
+
+    delete_resp = client.delete(f"/work/session/{session_id}")
+    assert delete_resp.status_code == 204
+
+    day_summary = client.get("/days", params={"from_date": "2024-06-01", "to_date": "2024-06-01"}).json()[0]
+    assert day_summary["work_seconds"] == 0
+
+    day_sessions = client.get("/work/day/2024-06-01").json()
+    assert all(item["id"] != session_id for item in day_sessions)
 
 
 def test_subtrack_creation(client: TestClient):

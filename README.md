@@ -23,9 +23,10 @@ TimeTrack ist eine selbstgehostete Stempeluhr mit React-Frontend und FastAPI-Bac
 
 ## Features im MVP
 
-- ⏱️ **Arbeitszeit starten/pausieren/stoppen** – direkt in der UI oder per Token-Link (`/a/<token>`) inkl. Live-Laufzeitanzeige
+- ⏱️ **Arbeitszeit starten/pausieren/stoppen** – direkt in der UI oder per Token-Link (`/a/<token>`) inkl. optionaler Startzeit und Live-Laufzeitanzeige
 - 🗓️ **Mein Tag Dashboard** – Startseite mit Laufzeituhr, Tagesstatistik, aktuellem Kalender und Subtracks (Meetings, Projekte, Notizen)
 - 📝 **Nachträgliche Erfassung** – Meetings & vergessene Blöcke per Formular nachtragen
+- ✏️ **Protokoll bearbeiten** – Einträge direkt im Tagesprotokoll korrigieren oder löschen
 - 📅 **Kalender- und Tagesübersichten** – Tages-, Monats- und Jahresansicht mit Stundenanalyse
 - 🌴 **Urlaub & Arbeitsunfähigkeit** – Erfassung inkl. Kommentar & Genehmigungsstatus
 - 📆 **Kalenderabgleich** – Termine im internen Kalender als „Teilgenommen“/„Nicht teilgenommen“ markieren
@@ -110,6 +111,8 @@ Die Backend-Tests verifizieren den kompletten Workflow (Start/Pause/Stop, Export
 | `/work/subtracks/{yyyy-mm-dd}` | GET  | Subtracks (Meetings/Tags) des Tages |
 | `/work/subtracks`        | POST    | Subtrack für einen Tag erfassen |
 | `/work/manual`        | POST    | Arbeitszeit nachtragen          |
+| `/work/session/{id}`  | PATCH   | Protokolleintrag bearbeiten     |
+| `/work/session/{id}`  | DELETE  | Protokolleintrag löschen        |
 | `/days?from&to`       | GET     | Tages-Summaries im Zeitraum     |
 | `/leaves`             | GET/POST| Urlaub/AU verwalten             |
 | `/calendar/events`    | GET/POST/PATCH | Kalendertermine & Teilnahme |

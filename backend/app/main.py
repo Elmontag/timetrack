@@ -30,6 +30,7 @@ from .schemas import (
     WorkSessionBase,
     WorkSessionCreateRequest,
     WorkSessionManualRequest,
+    WorkSessionUpdateRequest,
     WorkStopRequest,
     WorkToggleResponse,
     SettingsResponse,
@@ -50,7 +51,9 @@ from .services import (
     set_calendar_participation,
     start_session,
     stop_session,
+    update_session,
     update_runtime_settings,
+    delete_session,
 )
 from .state import RuntimeState
 from .token_utils import consume_token, create_token, verify_token
@@ -83,7 +86,7 @@ def healthz() -> dict[str, str]:
 
 @app.post("/work/start", response_model=WorkSessionBase, status_code=status.HTTP_201_CREATED)
 def work_start(payload: WorkSessionCreateRequest, db: Session = Depends(get_db)) -> WorkSessionBase:
-    session = start_session(db, payload.project, payload.tags, payload.comment)
+    session = start_session(db, payload.project, payload.tags, payload.comment, payload.start_time)
     return session
 
 
@@ -149,6 +152,26 @@ def create_work_subtrack(
         payload.note,
     )
     return subtrack
+
+
+@app.patch("/work/session/{session_id}", response_model=WorkSessionBase)
+def work_update_session(
+    session_id: int,
+    payload: WorkSessionUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> WorkSessionBase:
+    state: RuntimeState = request.app.state.runtime_state
+    changes = payload.model_dump(exclude_unset=True)
+    session = update_session(db, state, session_id, changes)
+    return session
+
+
+@app.delete("/work/session/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
+def work_delete_session(session_id: int, request: Request, db: Session = Depends(get_db)) -> Response:
+    state: RuntimeState = request.app.state.runtime_state
+    delete_session(db, state, session_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/days", response_model=list[DaySummaryResponse])

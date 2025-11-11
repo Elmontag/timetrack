@@ -97,7 +97,7 @@ export default function App() {
       default:
         return null
     }
-  }, [activeTab, activeSession, refreshKey, triggerRefresh])
+  }, [activeTab, activeSession, refreshKey, triggerRefresh, workView])
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">

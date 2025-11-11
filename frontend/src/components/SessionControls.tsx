@@ -18,9 +18,16 @@ export function SessionControls({ activeSession, onUpdate }: Props) {
   const { run: runPause, loading: pauseLoading } = useAsync(pauseSession)
   const { run: runStop, loading: stopLoading } = useAsync(stopSession)
   const [tick, setTick] = useState(() => Date.now())
+  const [startTime, setStartTime] = useState(() => dayjs().format('YYYY-MM-DDTHH:mm'))
 
   const isPaused = activeSession?.status === 'paused'
   const isActive = activeSession && ['active', 'paused'].includes(activeSession.status)
+
+  useEffect(() => {
+    if (!activeSession || activeSession.status === 'stopped') {
+      setStartTime(dayjs().format('YYYY-MM-DDTHH:mm'))
+    }
+  }, [activeSession])
 
   useEffect(() => {
     if (!activeSession || activeSession.status === 'stopped') {
@@ -33,7 +40,14 @@ export function SessionControls({ activeSession, onUpdate }: Props) {
   }, [activeSession])
 
   const handleStart = async () => {
-    const session = await runStart({ comment })
+    const payload: { comment?: string; start_time?: string } = {}
+    if (comment.trim()) {
+      payload.comment = comment
+    }
+    if (startTime) {
+      payload.start_time = dayjs(startTime).toISOString()
+    }
+    const session = await runStart(payload)
     setComment('')
     onUpdate(session)
   }
@@ -74,7 +88,28 @@ export function SessionControls({ activeSession, onUpdate }: Props) {
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-900/50">
       <h2 className="text-lg font-semibold text-slate-100">Arbeitszeiterfassung</h2>
       <p className="mt-1 text-sm text-slate-400">Steuere deine aktuelle Arbeitszeit mit einem Klick.</p>
-      <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-center">
+      <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-end">
+        <label className="text-sm md:w-64">
+          <span className="text-slate-300">Startzeit (optional)</span>
+          <div className="mt-1 flex items-center gap-2">
+            <input
+              type="datetime-local"
+              value={startTime}
+              onChange={(event) => setStartTime(event.target.value)}
+              disabled={isActive || startLoading}
+              className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-60"
+            />
+            <button
+              type="button"
+              onClick={() => setStartTime(dayjs().format('YYYY-MM-DDTHH:mm'))}
+              disabled={isActive || startLoading}
+              className="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1 text-xs text-slate-200 transition hover:bg-slate-800 disabled:opacity-60"
+            >
+              Jetzt
+            </button>
+          </div>
+          <span className="mt-1 block text-xs text-slate-500">Standard ist die aktuelle Zeit – passe sie bei Bedarf rückwirkend an.</span>
+        </label>
         <label className="flex-1 text-sm">
           <span className="text-slate-300">Notiz (optional)</span>
           <textarea

@@ -47,6 +47,7 @@ class WorkSessionBase(BaseModel):
 
 
 class WorkSessionCreateRequest(BaseModel):
+    start_time: Optional[dt.datetime] = None
     project: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     comment: Optional[str] = None
@@ -65,6 +66,14 @@ class WorkSessionManualRequest(BaseModel):
     end_time: dt.datetime
     project: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
+    comment: Optional[str] = None
+
+
+class WorkSessionUpdateRequest(BaseModel):
+    start_time: Optional[dt.datetime] = None
+    end_time: Optional[dt.datetime] = None
+    project: Optional[str] = None
+    tags: Optional[List[str]] = None
     comment: Optional[str] = None
 
 

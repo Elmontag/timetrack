@@ -83,7 +83,12 @@ const client = axios.create({
   baseURL: API_BASE,
 })
 
-export async function startSession(payload: { project?: string; tags?: string[]; comment?: string }) {
+export async function startSession(payload: {
+  start_time?: string
+  project?: string
+  tags?: string[]
+  comment?: string
+}) {
   const response = await client.post<WorkSession>('/work/start', payload)
   return response.data
 }
@@ -112,6 +117,24 @@ export async function createManualSession(payload: {
 export async function getSessionsForDay(day: string) {
   const response = await client.get<WorkSession[]>(`/work/day/${day}`)
   return response.data
+}
+
+export async function updateSession(
+  sessionId: number,
+  payload: {
+    start_time?: string | null
+    end_time?: string | null
+    project?: string | null
+    tags?: string[] | null
+    comment?: string | null
+  },
+) {
+  const response = await client.patch<WorkSession>(`/work/session/${sessionId}`, payload)
+  return response.data
+}
+
+export async function deleteSession(sessionId: number) {
+  await client.delete(`/work/session/${sessionId}`)
 }
 
 export async function getDaySummaries(from: string, to: string) {

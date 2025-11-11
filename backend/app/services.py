@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections import defaultdict
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 from zoneinfo import ZoneInfo
 
@@ -11,7 +12,7 @@ from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
-from sqlalchemy import and_, func
+from sqlalchemy import and_
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -64,12 +65,18 @@ def get_active_session(db: Session) -> Optional[WorkSession]:
     )
 
 
-def start_session(db: Session, project: Optional[str], tags: List[str], comment: Optional[str]) -> WorkSession:
+def start_session(
+    db: Session,
+    project: Optional[str],
+    tags: List[str],
+    comment: Optional[str],
+    start_time: Optional[dt.datetime] = None,
+) -> WorkSession:
     active = get_active_session(db)
     if active:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Active session already exists")
     session = WorkSession(
-        start_time=_now(),
+        start_time=_ensure_utc(start_time) if start_time else _now(),
         project=project,
         tags=tags,
         comment=comment,
@@ -157,30 +164,48 @@ def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
     return sessions
 
 
-def compute_day_summary(db: Session, day: dt.date, state: RuntimeState) -> DaySummary:
-    start, end = _day_bounds(day)
-    totals = (
-        db.query(
-            func.sum(WorkSession.total_seconds).label("work_seconds"),
-            func.sum(WorkSession.paused_duration).label("pause_seconds"),
-        )
+def _aggregate_sessions(
+    db: Session,
+    start_day: dt.date,
+    end_day: dt.date,
+) -> Dict[dt.date, Dict[str, int]]:
+    range_start, _ = _day_bounds(start_day)
+    _, range_end = _day_bounds(end_day)
+    sessions = (
+        db.query(WorkSession)
         .filter(
             and_(
-                WorkSession.start_time >= start,
-                WorkSession.start_time < end,
+                WorkSession.start_time >= range_start,
+                WorkSession.start_time < range_end,
                 WorkSession.status == "stopped",
             )
         )
-        .one()
+        .all()
     )
-    summary = (
-        db.query(DaySummary).filter(DaySummary.day == day).one_or_none()
-        or DaySummary(day=day)
-    )
-    summary.work_seconds = int(totals.work_seconds or 0)
-    summary.pause_seconds = int(totals.pause_seconds or 0)
-    expected_daily_seconds = _expected_daily_seconds(state)
-    summary.overtime_seconds = summary.work_seconds - expected_daily_seconds
+    totals: Dict[dt.date, Dict[str, int]] = defaultdict(lambda: {"work": 0, "pause": 0})
+    for session in sessions:
+        local_start = _from_db_datetime(session.start_time).astimezone(LOCAL_TZ)
+        day = local_start.date()
+        if day < start_day or day > end_day:
+            continue
+        total_seconds = session.total_seconds
+        if total_seconds is None and session.stop_time:
+            start_utc = _from_db_datetime(session.start_time)
+            stop_utc = _from_db_datetime(session.stop_time)
+            total_seconds = int((stop_utc - start_utc).total_seconds()) - (session.paused_duration or 0)
+        totals[day]["work"] += max(total_seconds or 0, 0)
+        totals[day]["pause"] += session.paused_duration or 0
+    return totals
+
+
+def update_day_summary(db: Session, day: dt.date, state: RuntimeState) -> DaySummary:
+    totals = _aggregate_sessions(db, day, day)
+    expected = _expected_daily_seconds(state)
+    summary = db.query(DaySummary).filter(DaySummary.day == day).one_or_none() or DaySummary(day=day)
+    day_totals = totals.get(day, {"work": 0, "pause": 0})
+    summary.work_seconds = day_totals["work"]
+    summary.pause_seconds = day_totals["pause"]
+    summary.overtime_seconds = summary.work_seconds - expected
     summary.updated_at = _now()
     db.add(summary)
     db.commit()
@@ -188,17 +213,87 @@ def compute_day_summary(db: Session, day: dt.date, state: RuntimeState) -> DaySu
     return summary
 
 
-def update_day_summary(db: Session, day: dt.date, state: RuntimeState) -> DaySummary:
-    return compute_day_summary(db, day, state)
-
-
 def range_day_summaries(db: Session, start_day: dt.date, end_day: dt.date, state: RuntimeState) -> List[DaySummary]:
+    totals = _aggregate_sessions(db, start_day, end_day)
+    expected = _expected_daily_seconds(state)
     summaries: List[DaySummary] = []
     current = start_day
+    now = _now()
     while current <= end_day:
-        summaries.append(compute_day_summary(db, current, state))
+        totals_for_day = totals.get(current, {"work": 0, "pause": 0})
+        summary = DaySummary(
+            day=current,
+            work_seconds=totals_for_day["work"],
+            pause_seconds=totals_for_day["pause"],
+            overtime_seconds=totals_for_day["work"] - expected,
+            updated_at=now,
+        )
+        summaries.append(summary)
         current += dt.timedelta(days=1)
     return summaries
+
+
+def update_session(
+    db: Session,
+    state: RuntimeState,
+    session_id: int,
+    changes: Dict[str, Any],
+) -> WorkSession:
+    session = db.get(WorkSession, session_id)
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if session.status != "stopped":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only stopped sessions can be edited")
+
+    old_day = _from_db_datetime(session.start_time).astimezone(LOCAL_TZ).date()
+
+    if "start_time" in changes and changes["start_time"] is not None:
+        session.start_time = _ensure_utc(changes["start_time"])
+    if "end_time" in changes and changes["end_time"] is not None:
+        session.stop_time = _ensure_utc(changes["end_time"])
+    if session.stop_time is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Stop time is required")
+    if session.start_time >= session.stop_time:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Start must be before end")
+
+    if "comment" in changes:
+        session.comment = changes["comment"]
+    if "project" in changes:
+        session.project = changes["project"]
+    if "tags" in changes:
+        session.tags = changes["tags"] or []
+
+    start_utc = _from_db_datetime(session.start_time)
+    stop_utc = _from_db_datetime(session.stop_time)
+    duration = stop_utc - start_utc
+    session.total_seconds = max(int(duration.total_seconds()) - (session.paused_duration or 0), 0)
+    session.last_pause_start = None
+    session.status = "stopped"
+
+    new_day = _from_db_datetime(session.start_time).astimezone(LOCAL_TZ).date()
+
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+
+    affected_days = {old_day, new_day}
+    for day in affected_days:
+        update_day_summary(db, day, state)
+
+    return session
+
+
+def delete_session(db: Session, state: RuntimeState, session_id: int) -> None:
+    session = db.get(WorkSession, session_id)
+    if not session:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if session.status != "stopped":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Active sessions cannot be deleted")
+
+    day = _from_db_datetime(session.start_time).astimezone(LOCAL_TZ).date()
+    db.delete(session)
+    db.commit()
+    update_day_summary(db, day, state)
 
 
 def create_subtrack(
