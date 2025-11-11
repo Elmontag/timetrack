@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import datetime as dt
+from typing import Optional
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
-from app import models
+from app import models, services
 
 
 def test_start_pause_resume_stop_flow(client: TestClient):
@@ -235,12 +236,40 @@ def test_calendar_event_participation(client: TestClient):
     assert any(event["id"] == event_id and event["participated"] for event in events)
 
 
+def test_calendar_events_trigger_caldav_sync(monkeypatch, client: TestClient):
+    called: dict[str, tuple[Optional[str], Optional[str]]] = {}
+
+    def fake_sync(db, state, start_date, end_date):
+        called["params"] = (
+            start_date.isoformat() if start_date else None,
+            end_date.isoformat() if end_date else None,
+        )
+
+    monkeypatch.setattr(services, "sync_caldav_events", fake_sync)
+    resp = client.get("/calendar/events")
+    assert resp.status_code == 200
+    assert "params" in called
+
+
+def test_caldav_calendar_listing(monkeypatch, client: TestClient):
+    monkeypatch.setattr(
+        "app.main.fetch_caldav_calendars",
+        lambda state: [{"id": "cal-1", "name": "Team"}, {"id": "cal-2", "name": "Privat"}],
+    )
+    resp = client.get("/caldav/calendars")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload[0]["id"] == "cal-1"
+    assert payload[1]["name"] == "Privat"
+
+
 def test_settings_update(client: TestClient, session: Session):
     update_payload = {
         "block_ips": ["192.168.0.0/24"],
         "caldav_url": "https://cal.example.com",
         "caldav_user": "user",
         "caldav_default_cal": "Work",
+        "caldav_selected_calendars": ["Work", "Private"],
         "expected_daily_hours": 7.5,
         "expected_weekly_hours": 37.5,
     }
@@ -249,6 +278,7 @@ def test_settings_update(client: TestClient, session: Session):
     data = resp.json()
     assert "192.168.0.0/24" in data["block_ips"]
     assert data["caldav_url"] == "https://cal.example.com"
+    assert set(data["caldav_selected_calendars"]) == {"Work", "Private"}
     assert data["expected_daily_hours"] == 7.5
     assert data["expected_weekly_hours"] == 37.5
 

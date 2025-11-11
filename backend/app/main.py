@@ -20,6 +20,7 @@ from .schemas import (
     CalendarEventCreateRequest,
     CalendarEventResponse,
     CalendarEventUpdateRequest,
+    CalDAVCalendarResponse,
     DaySummaryResponse,
     ExportRequest,
     ExportResponse,
@@ -40,6 +41,7 @@ from .services import (
     create_calendar_event,
     create_subtrack,
     create_leave,
+    fetch_caldav_calendars,
     create_manual_session,
     export_sessions,
     list_calendar_events,
@@ -200,11 +202,20 @@ def get_leaves(from_date: Optional[dt.date] = None, to_date: Optional[dt.date] =
 
 @app.get("/calendar/events", response_model=list[CalendarEventResponse])
 def get_calendar_events(
+    request: Request,
     from_date: Optional[dt.date] = None,
     to_date: Optional[dt.date] = None,
     db: Session = Depends(get_db),
 ) -> list[CalendarEventResponse]:
-    return list_calendar_events(db, from_date, to_date)
+    state: RuntimeState = request.app.state.runtime_state
+    return list_calendar_events(db, state, from_date, to_date)
+
+
+@app.get("/caldav/calendars", response_model=list[CalDAVCalendarResponse])
+def get_caldav_calendars(request: Request) -> list[CalDAVCalendarResponse]:
+    state: RuntimeState = request.app.state.runtime_state
+    calendars = fetch_caldav_calendars(state)
+    return [CalDAVCalendarResponse(id=item["id"], name=item["name"]) for item in calendars]
 
 
 @app.post("/calendar/events", response_model=CalendarEventResponse, status_code=status.HTTP_201_CREATED)
@@ -321,6 +332,7 @@ def read_settings(request: Request) -> SettingsResponse:
         caldav_url=snapshot["caldav_url"] or None,
         caldav_user=snapshot["caldav_user"] or None,
         caldav_default_cal=snapshot["caldav_default_cal"] or None,
+        caldav_selected_calendars=snapshot["caldav_selected_calendars"],
         caldav_password_set=snapshot["caldav_password_set"],
         expected_daily_hours=snapshot["expected_daily_hours"],
         expected_weekly_hours=snapshot["expected_weekly_hours"],
@@ -341,6 +353,7 @@ def write_settings(payload: SettingsUpdateRequest, request: Request, db: Session
         caldav_url=snapshot["caldav_url"] or None,
         caldav_user=snapshot["caldav_user"] or None,
         caldav_default_cal=snapshot["caldav_default_cal"] or None,
+        caldav_selected_calendars=snapshot["caldav_selected_calendars"],
         caldav_password_set=snapshot["caldav_password_set"],
         expected_daily_hours=snapshot["expected_daily_hours"],
         expected_weekly_hours=snapshot["expected_weekly_hours"],

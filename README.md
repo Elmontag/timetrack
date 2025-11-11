@@ -32,7 +32,7 @@ TimeTrack ist eine selbstgehostete Stempeluhr mit React-Frontend und FastAPI-Bac
 - 📆 **Kalenderabgleich** – Termine im internen Kalender als „Teilgenommen“/„Nicht teilgenommen“ markieren
 - 📤 **Exporte** – Stundenzettel oder Abwesenheiten als PDF oder XLSX, Ablage im Export-Verzeichnis
 - 🔐 **Sicherheit** – IP-Blocklist, HMAC-Token mit TTL, optional IP-Bindung & Einmal-Token
-- ⚙️ **Einstellungsmenü** – IP-Blocklist, Soll-Stunden (Tag/Woche) und CalDAV-Zugangsdaten direkt in der UI pflegen
+- ⚙️ **Einstellungsmenü** – IP-Blocklist, Soll-Stunden (Tag/Woche) sowie CalDAV-Zugang mit Mehrfachauswahl der verfügbaren Kalender bequem in der UI pflegen
 - 🛠️ **API** – REST/JSON, OpenAPI-Schema (`/docs`) und Healthcheck (`/healthz`)
 
 ## Voraussetzungen
@@ -116,6 +116,7 @@ Die Backend-Tests verifizieren den kompletten Workflow (Start/Pause/Stop, Export
 | `/days?from&to`       | GET     | Tages-Summaries im Zeitraum     |
 | `/leaves`             | GET/POST| Urlaub/AU verwalten             |
 | `/calendar/events`    | GET/POST/PATCH | Kalendertermine & Teilnahme |
+| `/caldav/calendars`   | GET     | Serverseitig verfügbare CalDAV-Kalender |
 | `/exports`            | POST    | Export (PDF/XLSX) erstellen     |
 | `/exports/{id}`       | GET     | Export herunterladen            |
 | `/tokens`             | POST    | Aktions-Token erzeugen          |
@@ -126,7 +127,7 @@ Die Backend-Tests verifizieren den kompletten Workflow (Start/Pause/Stop, Export
 
 Die React-App bietet einen klar strukturierten Flow:
 
-1. **Mein Tag:** Laufzeituhr, Tagesstatistik, Kalendereinträge und Subtrack-Verwaltung
+1. **Mein Tag:** Laufzeituhr (Header-Bar), Tagesstatistik, Kalendereinträge und Subtrack-Verwaltung
 2. **Arbeitszeit:** Protokoll, Nachtrag-Formular & Analyse (Tag/Monat/Jahr)
 3. **Abwesenheiten:** Formular + Liste für Urlaub/AU
 4. **Kalender:** Termine importieren/erfassen und Teilnahme markieren

@@ -1,163 +1,141 @@
-import { PlayIcon, PauseIcon, StopIcon } from '@heroicons/react/24/outline'
-import clsx from 'clsx'
 import dayjs from 'dayjs'
-import { useEffect, useMemo, useState } from 'react'
-import { pauseSession, startSession, stopSession, WorkSession } from '../api'
+import { FormEvent, useEffect, useMemo, useState } from 'react'
+import { updateSession, WorkSession } from '../api'
 import { useAsync } from '../hooks/useAsync'
+
+interface StartConfig {
+  startTime: string
+  comment: string
+}
 
 interface Props {
   activeSession: WorkSession | null
-  onUpdate: (session: WorkSession | null) => void
+  startConfig: StartConfig
+  onStartConfigChange: (config: StartConfig) => void
+  onStart: (override?: { start_time?: string; comment?: string }) => Promise<void>
+  onStop: (comment?: string) => Promise<void>
 }
 
-const baseButton = 'inline-flex items-center gap-2 rounded-md px-3 py-2 text-sm font-semibold transition-colors focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50'
-
-export function SessionControls({ activeSession, onUpdate }: Props) {
-  const [comment, setComment] = useState('')
-  const { run: runStart, loading: startLoading } = useAsync(startSession)
-  const { run: runPause, loading: pauseLoading } = useAsync(pauseSession)
-  const { run: runStop, loading: stopLoading } = useAsync(stopSession)
-  const [tick, setTick] = useState(() => Date.now())
-  const [startTime, setStartTime] = useState(() => dayjs().format('YYYY-MM-DDTHH:mm'))
-
-  const isPaused = activeSession?.status === 'paused'
-  const isActive = activeSession && ['active', 'paused'].includes(activeSession.status)
+export function SessionControls({ activeSession, startConfig, onStartConfigChange, onStart, onStop }: Props) {
+  const [activeNote, setActiveNote] = useState('')
+  const { run: runUpdate, loading: updatingNote } = useAsync(updateSession)
 
   useEffect(() => {
-    if (!activeSession || activeSession.status === 'stopped') {
-      setStartTime(dayjs().format('YYYY-MM-DDTHH:mm'))
-    }
-  }, [activeSession])
+    setActiveNote(activeSession?.comment ?? '')
+  }, [activeSession?.id, activeSession?.comment])
 
-  useEffect(() => {
-    if (!activeSession || activeSession.status === 'stopped') {
-      return
-    }
-    const interval = window.setInterval(() => {
-      setTick(Date.now())
-    }, 1000)
-    return () => window.clearInterval(interval)
-  }, [activeSession])
+  const startTimeInput = startConfig.startTime
 
-  const handleStart = async () => {
-    const payload: { comment?: string; start_time?: string } = {}
-    if (comment.trim()) {
-      payload.comment = comment
+  const handleStartSubmit = async (event: FormEvent) => {
+    event.preventDefault()
+    const payload: { start_time?: string; comment?: string } = {}
+    if (startTimeInput) {
+      payload.start_time = dayjs(startTimeInput).toISOString()
     }
-    if (startTime) {
-      payload.start_time = dayjs(startTime).toISOString()
+    if (startConfig.comment.trim()) {
+      payload.comment = startConfig.comment.trim()
     }
-    const session = await runStart(payload)
-    setComment('')
-    onUpdate(session)
+    await onStart(payload)
   }
 
-  const handlePause = async () => {
-    const { session } = await runPause()
-    onUpdate(session)
+  const handleStopWithNote = async () => {
+    await onStop(activeNote)
   }
 
-  const handleStop = async () => {
-    const session = await runStop({ comment })
-    setComment('')
-    onUpdate(null)
+  const handleSaveNote = async () => {
+    if (!activeSession) return
+    await runUpdate(activeSession.id, { comment: activeNote || null })
   }
 
-  const startLabel = useMemo(() => (isActive ? 'Laufende Sitzung' : 'Arbeitszeit starten'), [isActive])
-
-  const runtimeLabel = useMemo(() => {
-    if (!activeSession || activeSession.status === 'stopped') {
-      return null
-    }
-    const now = dayjs(tick)
-    const start = dayjs(activeSession.start_time)
-    let pauseSeconds = activeSession.paused_duration || 0
-    if (activeSession.status === 'paused' && activeSession.last_pause_start) {
-      pauseSeconds += now.diff(dayjs(activeSession.last_pause_start), 'second')
-    }
-    const elapsed = Math.max(0, now.diff(start, 'second') - pauseSeconds)
-    const hours = Math.floor(elapsed / 3600)
-    const minutes = Math.floor((elapsed % 3600) / 60)
-    const seconds = elapsed % 60
-    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds
-      .toString()
-      .padStart(2, '0')}`
-  }, [activeSession, tick])
+  const plannedStart = useMemo(() => {
+    if (!startTimeInput) return 'Sofort'
+    return dayjs(startTimeInput).format('DD.MM.YYYY HH:mm')
+  }, [startTimeInput])
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-900/50">
-      <h2 className="text-lg font-semibold text-slate-100">Arbeitszeiterfassung</h2>
-      <p className="mt-1 text-sm text-slate-400">Steuere deine aktuelle Arbeitszeit mit einem Klick.</p>
-      <div className="mt-4 flex flex-col gap-3 md:flex-row md:items-end">
-        <label className="text-sm md:w-64">
-          <span className="text-slate-300">Startzeit (optional)</span>
-          <div className="mt-1 flex items-center gap-2">
+    <div className="space-y-6">
+      <form
+        onSubmit={handleStartSubmit}
+        className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 shadow-lg shadow-slate-950/40"
+      >
+        <h2 className="text-lg font-semibold text-slate-100">Nächster Arbeitsstart</h2>
+        <p className="text-sm text-slate-400">
+          Plane Startzeit und Notiz vor. Der Start erfolgt über die Buttons im Header oder über diese Aktion.
+        </p>
+        <div className="mt-4 grid gap-4 md:grid-cols-2">
+          <label className="text-sm text-slate-300">
+            Startzeit
             <input
               type="datetime-local"
-              value={startTime}
-              onChange={(event) => setStartTime(event.target.value)}
-              disabled={isActive || startLoading}
-              className="w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40 disabled:opacity-60"
+              value={startTimeInput}
+              onChange={(event) => onStartConfigChange({ ...startConfig, startTime: event.target.value })}
+              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
             />
-            <button
-              type="button"
-              onClick={() => setStartTime(dayjs().format('YYYY-MM-DDTHH:mm'))}
-              disabled={isActive || startLoading}
-              className="rounded-md border border-slate-700 bg-slate-900/70 px-2 py-1 text-xs text-slate-200 transition hover:bg-slate-800 disabled:opacity-60"
-            >
-              Jetzt
-            </button>
-          </div>
-          <span className="mt-1 block text-xs text-slate-500">Standard ist die aktuelle Zeit – passe sie bei Bedarf rückwirkend an.</span>
-        </label>
-        <label className="flex-1 text-sm">
-          <span className="text-slate-300">Notiz (optional)</span>
-          <textarea
-            value={comment}
-            onChange={(event) => setComment(event.target.value)}
-            placeholder="Was machst du gerade?"
-            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
-            rows={2}
-          />
-        </label>
-        <div className="flex w-full flex-wrap gap-2 md:w-auto">
+            <span className="mt-1 block text-xs text-slate-500">Standard ist die aktuelle Zeit.</span>
+          </label>
+          <label className="text-sm text-slate-300">
+            Notiz zum Start
+            <textarea
+              value={startConfig.comment}
+              onChange={(event) => onStartConfigChange({ ...startConfig, comment: event.target.value })}
+              rows={3}
+              placeholder="Was steht an?"
+              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </label>
+        </div>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-slate-400">Geplanter Start: {plannedStart}</p>
           <button
-            onClick={handleStart}
-            disabled={startLoading || isActive}
-            className={clsx(baseButton, 'bg-primary text-primary-foreground hover:bg-sky-400/90')}
-            aria-label={startLabel}
+            type="submit"
+            className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-sky-400/90 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-slate-950"
           >
-            <PlayIcon className="h-5 w-5" aria-hidden="true" />
-            Start
-          </button>
-          <button
-            onClick={handlePause}
-            disabled={!isActive || pauseLoading}
-            className={clsx(baseButton, 'bg-slate-800 text-slate-100 hover:bg-slate-700')}
-          >
-            {isPaused ? <PlayIcon className="h-5 w-5" /> : <PauseIcon className="h-5 w-5" />}
-            {isPaused ? 'Fortsetzen' : 'Pause'}
-          </button>
-          <button
-            onClick={handleStop}
-            disabled={!isActive || stopLoading}
-            className={clsx(baseButton, 'bg-rose-500 text-white hover:bg-rose-400')}
-          >
-            <StopIcon className="h-5 w-5" />
-            Stop
+            Start auslösen
           </button>
         </div>
-      </div>
+      </form>
+
       {activeSession && (
-        <p className="mt-3 text-sm text-slate-400">
-          Laufend seit <span className="font-medium text-slate-100">{new Date(activeSession.start_time).toLocaleString()}</span>
-          {activeSession.comment && <span className="text-slate-500"> – {activeSession.comment}</span>}
-          {runtimeLabel && (
-            <span className="ml-2 inline-flex items-center rounded-full bg-slate-800 px-2 py-0.5 font-mono text-xs text-primary">
-              {runtimeLabel}
+        <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6 shadow-lg shadow-slate-950/40">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-semibold text-slate-100">Aktive Sitzung</h3>
+              <p className="text-sm text-slate-400">
+                Gestartet am {dayjs(activeSession.start_time).format('DD.MM.YYYY HH:mm')} – Status{' '}
+                {activeSession.status === 'paused' ? 'Pausiert' : 'Laufend'}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={handleStopWithNote}
+              className="inline-flex items-center rounded-md border border-rose-500/60 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/20"
+            >
+              Stop mit Notiz
+            </button>
+          </div>
+          <label className="mt-4 block text-sm text-slate-300">
+            Notiz aktualisieren
+            <textarea
+              value={activeNote}
+              onChange={(event) => setActiveNote(event.target.value)}
+              rows={4}
+              className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </label>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3 text-sm">
+            <span className="text-slate-500">
+              Hinweis: Pausieren und Fortsetzen findest du oben im Header.
             </span>
-          )}
-        </p>
+            <button
+              type="button"
+              disabled={updatingNote}
+              onClick={handleSaveNote}
+              className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-primary hover:text-primary disabled:opacity-60"
+            >
+              Notiz speichern
+            </button>
+          </div>
+        </div>
       )}
     </div>
   )

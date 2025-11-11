@@ -8,21 +8,38 @@ import { TodaySummary } from './TodaySummary'
 
 interface Props {
   activeSession: WorkSession | null
-  onSessionUpdate: (session: WorkSession | null) => void
+  startConfig: { startTime: string; comment: string }
+  onStartConfigChange: (config: { startTime: string; comment: string }) => void
+  onStart: (override?: { start_time?: string; comment?: string }) => Promise<void>
+  onStop: (comment?: string) => Promise<void>
   refreshKey: string
   triggerRefresh: () => void
 }
 
-export function MyDayPage({ activeSession, onSessionUpdate, refreshKey, triggerRefresh }: Props) {
+export function MyDayPage({
+  activeSession,
+  startConfig,
+  onStartConfigChange,
+  onStart,
+  onStop,
+  refreshKey,
+  triggerRefresh,
+}: Props) {
   const today = dayjs().format('YYYY-MM-DD')
 
   return (
     <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
+      <div className="grid gap-6 xl:grid-cols-[2fr,1fr]">
         <SessionControls
           activeSession={activeSession}
-          onUpdate={(session) => {
-            onSessionUpdate(session)
+          startConfig={startConfig}
+          onStartConfigChange={onStartConfigChange}
+          onStart={async (payload) => {
+            await onStart(payload)
+            triggerRefresh()
+          }}
+          onStop={async (comment) => {
+            await onStop(comment)
             triggerRefresh()
           }}
         />

@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     caldav_user: Optional[str] = os.getenv("TT_CALDAV_USER")
     caldav_password: Optional[str] = os.getenv("TT_CALDAV_PASSWORD")
     caldav_default_cal: Optional[str] = os.getenv("TT_CALDAV_DEFAULT_CAL")
+    caldav_selected_calendars: List[str] = Field(
+        default_factory=lambda: [
+            entry.strip()
+            for entry in os.getenv("TT_CALDAV_CALENDARS", "").split(",")
+            if entry.strip()
+        ]
+    )
 
     locale: str = os.getenv("TT_LOCALE", "de-DE")
     timezone: str = os.getenv("TZ", "Europe/Berlin")

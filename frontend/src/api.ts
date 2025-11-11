@@ -61,9 +61,15 @@ export interface SettingsResponse {
   caldav_url: string | null
   caldav_user: string | null
   caldav_default_cal: string | null
+  caldav_selected_calendars: string[]
   caldav_password_set: boolean
   expected_daily_hours: number | null
   expected_weekly_hours: number | null
+}
+
+export interface CalDavCalendar {
+  id: string
+  name: string
 }
 
 export interface Subtrack {
@@ -206,6 +212,11 @@ export async function updateSettings(
   payload: Partial<SettingsResponse> & { caldav_password?: string | null }
 ) {
   const response = await client.put<SettingsResponse>('/settings', payload)
+  return response.data
+}
+
+export async function getCaldavCalendars() {
+  const response = await client.get<CalDavCalendar[]>('/caldav/calendars')
   return response.data
 }
 

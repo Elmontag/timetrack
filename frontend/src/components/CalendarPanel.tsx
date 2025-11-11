@@ -55,7 +55,7 @@ export function CalendarPanel({ refreshKey }: Props) {
   }
 
   return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-slate-100">Kalenderübersicht</h2>
@@ -77,7 +77,7 @@ export function CalendarPanel({ refreshKey }: Props) {
           />
         </div>
       </div>
-      <form onSubmit={handleSubmit} className="mt-4 grid gap-3 md:grid-cols-6">
+      <form onSubmit={handleSubmit} className="mt-4 grid gap-4 md:grid-cols-6">
         <label className="text-sm text-slate-300 md:col-span-2">
           Titel
           <input
@@ -132,13 +132,13 @@ export function CalendarPanel({ refreshKey }: Props) {
           <button
             type="submit"
             disabled={submitting}
-            className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-sky-400/90 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50"
+            className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-sky-400/90 focus:outline-none focus:ring-2 focus:ring-primary focus:ring-offset-2 focus:ring-offset-slate-950 disabled:opacity-50"
           >
             Termin speichern
           </button>
         </div>
       </form>
-      <div className="mt-5 max-h-72 overflow-y-auto rounded-lg border border-slate-800">
+      <div className="mt-6 max-h-80 overflow-y-auto rounded-xl border border-slate-800">
         <table className="min-w-full divide-y divide-slate-800 text-sm">
           <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-400">
             <tr>
@@ -167,7 +167,7 @@ export function CalendarPanel({ refreshKey }: Props) {
                     <button
                       type="button"
                       onClick={() => toggleParticipation(event.id, !event.participated)}
-                      className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                      className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-primary hover:text-primary"
                     >
                       {event.participated ? 'auf Nicht' : 'als Teilgenommen'}
                     </button>

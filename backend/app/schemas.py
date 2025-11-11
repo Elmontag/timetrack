@@ -211,6 +211,11 @@ class CalendarEventResponse(BaseModel):
         }
 
 
+class CalDAVCalendarResponse(BaseModel):
+    id: str
+    name: str
+
+
 class CalendarEventCreateRequest(BaseModel):
     title: str
     start_time: dt.datetime
@@ -273,6 +278,7 @@ class SettingsResponse(BaseModel):
     caldav_url: Optional[str]
     caldav_user: Optional[str]
     caldav_default_cal: Optional[str]
+    caldav_selected_calendars: List[str]
     caldav_password_set: bool
     expected_daily_hours: Optional[float]
     expected_weekly_hours: Optional[float]
@@ -284,5 +290,6 @@ class SettingsUpdateRequest(BaseModel):
     caldav_user: Optional[str] = None
     caldav_password: Optional[str] = None
     caldav_default_cal: Optional[str] = None
+    caldav_selected_calendars: Optional[List[str]] = None
     expected_daily_hours: Optional[float] = Field(default=None, ge=0)
     expected_weekly_hours: Optional[float] = Field(default=None, ge=0)

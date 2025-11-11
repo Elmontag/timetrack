@@ -19,6 +19,15 @@ from .config import settings
 from .models import CalendarEvent, DaySummary, ExportRecord, LeaveEntry, WorkSession, WorkSubtrack
 from .state import RuntimeState
 
+try:  # pragma: no cover - optional dependency
+    from caldav import DAVClient
+    from caldav import dav
+    from caldav.lib import error as caldav_error
+except Exception:  # pragma: no cover - caldav optional
+    DAVClient = None  # type: ignore[assignment]
+    dav = None  # type: ignore[assignment]
+    caldav_error = None  # type: ignore[assignment]
+
 
 UTC = dt.timezone.utc
 LOCAL_TZ = ZoneInfo(settings.timezone)
@@ -39,6 +48,172 @@ def _day_bounds(day: dt.date) -> Tuple[dt.datetime, dt.datetime]:
     end_local = start_local + dt.timedelta(days=1)
     return start_local.astimezone(UTC), end_local.astimezone(UTC)
 
+
+def _build_caldav_client(state: RuntimeState, *, strict: bool = False):
+    if DAVClient is None:
+        if strict:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="CalDAV support is not installed",
+            )
+        return None
+    if not (state.caldav_url and state.caldav_user and state.caldav_password):
+        if strict:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="CalDAV-Zugangsdaten sind unvollständig",
+            )
+        return None
+    try:
+        return DAVClient(
+            url=state.caldav_url,
+            username=state.caldav_user,
+            password=state.caldav_password,
+        )
+    except Exception as exc:  # pragma: no cover - network errors
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="CalDAV-Client konnte nicht initialisiert werden",
+        ) from exc
+
+
+def _calendar_matches_selection(selection: Iterable[str], *candidates: Optional[str]) -> bool:
+    normalized = {entry.strip().lower() for entry in selection if entry.strip()}
+    if not normalized:
+        return False
+    for candidate in candidates:
+        if candidate and candidate.strip().lower() in normalized:
+            return True
+    return False
+
+
+def _coerce_ical_datetime(value: Any) -> Optional[dt.datetime]:
+    if value is None:
+        return None
+    attr = getattr(value, "dt", value)
+    if isinstance(attr, dt.datetime):
+        if attr.tzinfo is None:
+            return attr.replace(tzinfo=LOCAL_TZ)
+        return attr
+    if isinstance(attr, dt.date):
+        return dt.datetime.combine(attr, dt.time.min, tzinfo=LOCAL_TZ)
+    return None
+
+
+def fetch_caldav_calendars(state: RuntimeState) -> List[Dict[str, str]]:
+    client = _build_caldav_client(state, strict=True)
+    try:
+        principal = client.principal()
+        calendars = principal.calendars()
+    except Exception as exc:  # pragma: no cover - remote errors
+        if caldav_error and isinstance(exc, caldav_error.AuthorizationError):  # type: ignore[arg-type]
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="CalDAV-Anmeldung fehlgeschlagen") from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="CalDAV-Kalender konnten nicht geladen werden") from exc
+
+    results: List[Dict[str, str]] = []
+    for calendar in calendars:
+        calendar_id = getattr(calendar, "url", None)
+        display_name: Optional[str] = None
+        if dav is not None and hasattr(calendar, "get_properties"):
+            try:
+                props = calendar.get_properties([dav.DisplayName()])  # type: ignore[attr-defined]
+                display_value = props.get(dav.DisplayName()) if props else None  # type: ignore[attr-defined]
+                if display_value:
+                    display_name = str(display_value)
+            except Exception:  # pragma: no cover - best effort only
+                display_name = None
+        if not display_name:
+            display_name = getattr(calendar, "name", None)
+        if not display_name and calendar_id:
+            display_name = calendar_id.rstrip("/").split("/")[-1]
+        if not calendar_id:
+            calendar_id = display_name
+        if not calendar_id:
+            continue
+        results.append({"id": calendar_id, "name": display_name or calendar_id})
+    return results
+
+
+def sync_caldav_events(
+    db: Session,
+    state: RuntimeState,
+    start_date: Optional[dt.date],
+    end_date: Optional[dt.date],
+) -> None:
+    client = _build_caldav_client(state)
+    selected = state.caldav_selected_calendars
+    if client is None or not selected:
+        return
+
+    start_day = start_date or dt.date.today()
+    end_day = end_date or start_day
+    range_start, _ = _day_bounds(start_day)
+    _, range_end = _day_bounds(end_day)
+
+    try:
+        principal = client.principal()
+        calendars = principal.calendars()
+    except Exception as exc:  # pragma: no cover - remote errors
+        if caldav_error and isinstance(exc, caldav_error.AuthorizationError):  # type: ignore[arg-type]
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="CalDAV-Anmeldung fehlgeschlagen") from exc
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="CalDAV-Synchronisation fehlgeschlagen") from exc
+
+    existing = {
+        (event.title, event.start_time, event.end_time): event
+        for event in db.query(CalendarEvent)
+        .filter(CalendarEvent.start_time >= range_start, CalendarEvent.start_time <= range_end)
+        .all()
+    }
+    updated = False
+
+    for calendar in calendars:
+        calendar_id = getattr(calendar, "url", None)
+        calendar_name = getattr(calendar, "name", None)
+        if not _calendar_matches_selection(selected, calendar_id, calendar_name):
+            continue
+        try:
+            occurrences = calendar.date_search(range_start, range_end, expand=True)
+        except Exception:  # pragma: no cover - ignore calendar specific issues
+            continue
+        for occurrence in occurrences:
+            component = getattr(occurrence, "icalendar_component", None)
+            vevent = None
+            if component is not None:
+                if hasattr(component, "subcomponents"):
+                    for sub in component.subcomponents:  # type: ignore[attr-defined]
+                        if getattr(sub, "name", "").upper() == "VEVENT":
+                            vevent = sub
+                            break
+                if vevent is None and hasattr(component, "vevent"):
+                    vevent = component.vevent
+            if vevent is None:
+                continue
+            summary = vevent.get("summary")
+            dtstart = _coerce_ical_datetime(vevent.get("dtstart"))
+            dtend = _coerce_ical_datetime(vevent.get("dtend"))
+            if dtstart is None:
+                continue
+            start_utc = _ensure_utc(dtstart)
+            if dtend is None:
+                dtend = dtstart + dt.timedelta(hours=1)
+            end_utc = _ensure_utc(dtend)
+            key = (str(summary or ""), start_utc, end_utc)
+            if key in existing:
+                continue
+            event = CalendarEvent(
+                title=str(summary or "Unbenannter Termin"),
+                start_time=start_utc,
+                end_time=end_utc,
+                location=vevent.get("location"),
+                description=vevent.get("description"),
+                participated=False,
+            )
+            db.add(event)
+            existing[key] = event
+            updated = True
+
+    if updated:
+        db.commit()
 
 def _expected_daily_seconds(state: RuntimeState) -> int:
     if state.expected_daily_hours is not None:
@@ -392,9 +567,11 @@ def create_calendar_event(
 
 def list_calendar_events(
     db: Session,
+    state: RuntimeState,
     start_date: Optional[dt.date],
     end_date: Optional[dt.date],
 ) -> List[CalendarEvent]:
+    sync_caldav_events(db, state, start_date, end_date)
     query = db.query(CalendarEvent)
     if start_date:
         start, _ = _day_bounds(start_date)
@@ -421,6 +598,13 @@ def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> 
     if "block_ips" in normalized and normalized["block_ips"] is not None:
         if isinstance(normalized["block_ips"], str):
             normalized["block_ips"] = [ip.strip() for ip in normalized["block_ips"].split(",") if ip.strip()]
+    if "caldav_selected_calendars" in normalized and normalized["caldav_selected_calendars"] is not None:
+        if isinstance(normalized["caldav_selected_calendars"], str):
+            normalized["caldav_selected_calendars"] = [
+                entry.strip()
+                for entry in normalized["caldav_selected_calendars"].split(",")
+                if entry.strip()
+            ]
     state.apply(normalized)
     state.persist(
         db,
@@ -434,6 +618,7 @@ def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> 
                 "caldav_user",
                 "caldav_password",
                 "caldav_default_cal",
+                "caldav_selected_calendars",
                 "expected_daily_hours",
                 "expected_weekly_hours",
             }
