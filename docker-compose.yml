@@ -11,7 +11,7 @@ services:
       - TT_BLOCK_IPS=
       - TZ=Europe/Berlin
     volumes:
-      - ./data:/data
+      - timetrack-data:/data
     ports:
       - "8080:8080"
 
@@ -25,3 +25,5 @@ services:
       - api
     ports:
       - "5173:4173"
+volumes:
+  timetrack-data:

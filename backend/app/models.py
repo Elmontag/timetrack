@@ -177,3 +177,13 @@ class AppSetting(Base):
     key = Column(String(100), primary_key=True)
     value = Column(Text, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+
+class Holiday(Base):
+    __tablename__ = "holidays"
+
+    id = Column(Integer, primary_key=True)
+    day = Column(Date, nullable=False, unique=True, index=True)
+    name = Column(String(200), nullable=False)
+    source = Column(String(20), nullable=False, default="manual")
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)

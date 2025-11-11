@@ -11,6 +11,8 @@ export function SettingsPanel() {
   const [caldavPassword, setCaldavPassword] = useState('')
   const [expectedDaily, setExpectedDaily] = useState('')
   const [expectedWeekly, setExpectedWeekly] = useState('')
+  const [vacationPerYear, setVacationPerYear] = useState('')
+  const [vacationCarryover, setVacationCarryover] = useState('')
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState<'success' | 'error' | null>(null)
   const [availableCalendars, setAvailableCalendars] = useState<CalDavCalendar[]>([])
@@ -41,6 +43,8 @@ export function SettingsPanel() {
       setCaldavSelection(data.caldav_selected_calendars)
       setExpectedDaily(data.expected_daily_hours?.toString() ?? '')
       setExpectedWeekly(data.expected_weekly_hours?.toString() ?? '')
+      setVacationPerYear(data.vacation_days_per_year.toString())
+      setVacationCarryover(data.vacation_days_carryover.toString())
       if (data.caldav_url && data.caldav_user) {
         await loadCalendars()
       } else {
@@ -77,6 +81,8 @@ export function SettingsPanel() {
       }
       payload.expected_daily_hours = expectedDaily.trim() ? parseFloat(expectedDaily) : null
       payload.expected_weekly_hours = expectedWeekly.trim() ? parseFloat(expectedWeekly) : null
+      payload.vacation_days_per_year = vacationPerYear.trim() ? parseFloat(vacationPerYear) : null
+      payload.vacation_days_carryover = vacationCarryover.trim() ? parseFloat(vacationCarryover) : null
       if (passwordUpdate) {
         payload.caldav_password = caldavPassword || null
       }
@@ -85,6 +91,8 @@ export function SettingsPanel() {
       setBlockIps(updated.block_ips.join(', '))
       setExpectedDaily(updated.expected_daily_hours?.toString() ?? '')
       setExpectedWeekly(updated.expected_weekly_hours?.toString() ?? '')
+      setVacationPerYear(updated.vacation_days_per_year.toString())
+      setVacationCarryover(updated.vacation_days_carryover.toString())
       setCaldavSelection(updated.caldav_selected_calendars)
       if (updated.caldav_url && updated.caldav_user) {
         await loadCalendars()
@@ -125,7 +133,7 @@ export function SettingsPanel() {
         </button>
       </div>
 
-      <dl className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <dl className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-5">
         <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm">
           <dt className="text-slate-500">Umgebung</dt>
           <dd className="mt-1 font-medium text-slate-100">{settings.environment}</dd>
@@ -141,6 +149,12 @@ export function SettingsPanel() {
         <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm">
           <dt className="text-slate-500">Sollstunden pro Woche</dt>
           <dd className="mt-1 font-medium text-slate-100">{settings.expected_weekly_hours ?? '–'} h</dd>
+        </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4 text-sm">
+          <dt className="text-slate-500">Urlaubstage (inkl. Übertrag)</dt>
+          <dd className="mt-1 font-medium text-slate-100">
+            {(settings.vacation_days_per_year + settings.vacation_days_carryover).toFixed(1)} Tage
+          </dd>
         </div>
       </dl>
 
@@ -183,6 +197,30 @@ export function SettingsPanel() {
                 value={expectedWeekly}
                 onChange={(event) => setExpectedWeekly(event.target.value)}
                 placeholder="z. B. 40"
+                className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </label>
+            <label className="text-sm text-slate-300">
+              Urlaubstage pro Jahr
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={vacationPerYear}
+                onChange={(event) => setVacationPerYear(event.target.value)}
+                placeholder="z. B. 30"
+                className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </label>
+            <label className="text-sm text-slate-300">
+              Übertrag aus Vorjahr
+              <input
+                type="number"
+                min="0"
+                step="0.5"
+                value={vacationCarryover}
+                onChange={(event) => setVacationCarryover(event.target.value)}
+                placeholder="z. B. 2.5"
                 className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
               />
             </label>

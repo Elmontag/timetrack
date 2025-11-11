@@ -30,6 +30,8 @@ class RuntimeState:
         self.caldav_default_cal: Optional[str] = default_cal
         self.expected_daily_hours: Optional[float] = base_settings.expected_daily_hours
         self.expected_weekly_hours: Optional[float] = base_settings.expected_weekly_hours
+        self.vacation_days_per_year: float = base_settings.vacation_days_per_year
+        self.vacation_days_carryover: float = base_settings.vacation_days_carryover
 
     @property
     def block_ips(self) -> List[str]:
@@ -52,6 +54,8 @@ class RuntimeState:
                 "caldav_password_set": bool(self.caldav_password),
                 "expected_daily_hours": self.expected_daily_hours,
                 "expected_weekly_hours": self.expected_weekly_hours,
+                "vacation_days_per_year": self.vacation_days_per_year,
+                "vacation_days_carryover": self.vacation_days_carryover,
             }
 
     def apply(self, updates: Dict[str, Any]) -> None:
@@ -83,6 +87,10 @@ class RuntimeState:
             if "expected_weekly_hours" in updates:
                 value = updates.get("expected_weekly_hours")
                 self.expected_weekly_hours = float(value) if value not in (None, "") else None
+            if "vacation_days_per_year" in updates and updates["vacation_days_per_year"] is not None:
+                self.vacation_days_per_year = float(updates["vacation_days_per_year"])
+            if "vacation_days_carryover" in updates and updates["vacation_days_carryover"] is not None:
+                self.vacation_days_carryover = float(updates["vacation_days_carryover"])
 
     def load_from_db(self, session: Session) -> None:
         records = session.query(AppSetting).all()
@@ -105,6 +113,10 @@ class RuntimeState:
                 decoded["expected_daily_hours"] = float(record.value) if record.value else None
             elif record.key == "expected_weekly_hours":
                 decoded["expected_weekly_hours"] = float(record.value) if record.value else None
+            elif record.key == "vacation_days_per_year":
+                decoded["vacation_days_per_year"] = float(record.value) if record.value else 0.0
+            elif record.key == "vacation_days_carryover":
+                decoded["vacation_days_carryover"] = float(record.value) if record.value else 0.0
         if decoded:
             self.apply(decoded)
 
@@ -123,6 +135,8 @@ class RuntimeState:
                 continue
             if key in {"expected_daily_hours", "expected_weekly_hours"}:
                 value = "" if value in (None, "") else str(value)
+            if key in {"vacation_days_per_year", "vacation_days_carryover"}:
+                value = str(value)
             record = session.query(AppSetting).filter(AppSetting.key == key).one_or_none()
             if record:
                 record.value = value

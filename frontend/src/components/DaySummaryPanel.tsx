@@ -42,10 +42,32 @@ export function DaySummaryPanel({ refreshKey }: Props) {
   }, [range, refreshKey])
 
   const totals = useMemo(() => {
-    const work = summaries.reduce((sum, item) => sum + item.work_seconds, 0)
-    const overtime = summaries.reduce((sum, item) => sum + item.overtime_seconds, 0)
-    const pause = summaries.reduce((sum, item) => sum + item.pause_seconds, 0)
-    return { work, overtime, pause }
+    return summaries.reduce(
+      (acc, item) => {
+        acc.work += item.work_seconds
+        acc.pause += item.pause_seconds
+        acc.overtime += item.overtime_seconds
+        acc.vacationSeconds += item.vacation_seconds
+        acc.sickSeconds += item.sick_seconds
+        const baseline = item.baseline_expected_seconds ?? item.expected_seconds
+        if (item.vacation_seconds > 0 && baseline) {
+          acc.vacationDays += item.vacation_seconds / baseline
+        }
+        if (item.sick_seconds > 0 && baseline) {
+          acc.sickDays += item.sick_seconds / baseline
+        }
+        return acc
+      },
+      {
+        work: 0,
+        pause: 0,
+        overtime: 0,
+        vacationSeconds: 0,
+        sickSeconds: 0,
+        vacationDays: 0,
+        sickDays: 0,
+      },
+    )
   }, [summaries])
 
   const rows = useMemo(() => {
@@ -60,10 +82,18 @@ export function DaySummaryPanel({ refreshKey }: Props) {
         existing.work_seconds += summary.work_seconds
         existing.pause_seconds += summary.pause_seconds
         existing.overtime_seconds += summary.overtime_seconds
+        existing.vacation_seconds += summary.vacation_seconds
+        existing.sick_seconds += summary.sick_seconds
       } else {
         grouped.set(monthKey, {
           ...summary,
           day: monthKey,
+          vacation_seconds: summary.vacation_seconds,
+          sick_seconds: summary.sick_seconds,
+          leave_types: [],
+          is_weekend: false,
+          is_holiday: false,
+          holiday_name: null,
         })
       }
     })
@@ -71,6 +101,7 @@ export function DaySummaryPanel({ refreshKey }: Props) {
   }, [summaries, view])
 
   const formatHours = (seconds: number) => (seconds / 3600).toFixed(1).replace('.', ',') + ' h'
+  const formatDays = (value: number) => `${value.toFixed(1).replace('.', ',')} Tage`
 
   const viewTitle = view === 'day' ? 'Tagesübersicht' : view === 'month' ? 'Monatsübersicht' : 'Jahresanalyse'
 
@@ -130,7 +161,7 @@ export function DaySummaryPanel({ refreshKey }: Props) {
           )}
         </div>
       </div>
-      <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+      <dl className="mt-4 grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
         <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
           <dt className="text-sm text-slate-400">Arbeit gesamt</dt>
           <dd className="text-2xl font-semibold text-slate-100">{formatHours(totals.work)}</dd>
@@ -143,6 +174,16 @@ export function DaySummaryPanel({ refreshKey }: Props) {
           <dt className="text-sm text-slate-400">Überstunden</dt>
           <dd className="text-2xl font-semibold text-slate-100">{formatHours(totals.overtime)}</dd>
         </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+          <dt className="text-sm text-slate-400">Urlaub</dt>
+          <dd className="text-xl font-semibold text-slate-100">{formatDays(totals.vacationDays)}</dd>
+          <p className="text-xs text-slate-500">{formatHours(totals.vacationSeconds)}</p>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+          <dt className="text-sm text-slate-400">AU-Tage</dt>
+          <dd className="text-xl font-semibold text-slate-100">{formatDays(totals.sickDays)}</dd>
+          <p className="text-xs text-slate-500">{formatHours(totals.sickSeconds)}</p>
+        </div>
       </dl>
       <div className="mt-4 max-h-64 overflow-y-auto rounded-lg border border-slate-800 bg-slate-950/40">
         <table className="min-w-full divide-y divide-slate-800 text-sm">
@@ -152,6 +193,7 @@ export function DaySummaryPanel({ refreshKey }: Props) {
               <th className="px-4 py-2 text-left">Arbeit</th>
               <th className="px-4 py-2 text-left">Pausen</th>
               <th className="px-4 py-2 text-left">Saldo</th>
+              <th className="px-4 py-2 text-left">Hinweis</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
@@ -160,12 +202,32 @@ export function DaySummaryPanel({ refreshKey }: Props) {
                 <td className="px-4 py-2 text-slate-200">{summary.day}</td>
                 <td className="px-4 py-2 text-slate-100">{formatHours(summary.work_seconds)}</td>
                 <td className="px-4 py-2 text-slate-100">{formatHours(summary.pause_seconds)}</td>
-                <td className="px-4 py-2 font-medium text-slate-100">{formatHours(summary.overtime_seconds)}</td>
+                <td className={`px-4 py-2 font-medium ${summary.overtime_seconds >= 0 ? 'text-slate-100' : 'text-amber-300'}`}>
+                  {formatHours(summary.overtime_seconds)}
+                </td>
+                <td className="px-4 py-2 text-slate-300">
+                  {(() => {
+                    const hints: string[] = []
+                    if (summary.is_holiday && summary.holiday_name) {
+                      hints.push(`Feiertag: ${summary.holiday_name}`)
+                    }
+                    if (summary.is_weekend) {
+                      hints.push('Wochenende')
+                    }
+                    if (summary.leave_types.includes('vacation')) {
+                      hints.push('Urlaub')
+                    }
+                    if (summary.leave_types.includes('sick')) {
+                      hints.push('Arbeitsunfähigkeit')
+                    }
+                    return hints.length > 0 ? hints.join(', ') : '—'
+                  })()}
+                </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={4} className="px-4 py-3 text-center text-sm text-slate-400">
+                <td colSpan={5} className="px-4 py-3 text-center text-sm text-slate-400">
                   Keine Daten im ausgewählten Zeitraum.
                 </td>
               </tr>
