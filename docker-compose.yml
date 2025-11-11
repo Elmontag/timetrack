@@ -1,0 +1,27 @@
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    environment:
+      - TT_HOST=0.0.0.0
+      - TT_PORT=8080
+      - TT_BLOCK_IPS=
+      - TZ=Europe/Berlin
+    volumes:
+      - ./data:/data
+    ports:
+      - "8080:8080"
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    environment:
+      - VITE_API_BASE=http://api:8080
+    depends_on:
+      - api
+    ports:
+      - "5173:4173"

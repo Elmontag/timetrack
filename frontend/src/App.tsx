@@ -1,0 +1,239 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import dayjs from 'dayjs'
+import { API_BASE } from './config'
+import {
+  DaySummary,
+  getDaySummaries,
+  getSessionsForDay,
+  pauseSession,
+  startSession,
+  stopSession,
+  WorkSession,
+} from './api'
+import { SessionList } from './components/SessionList'
+import { DaySummaryPanel } from './components/DaySummaryPanel'
+import { LeaveManager } from './components/LeaveManager'
+import { ExportPanel } from './components/ExportPanel'
+import { ManualEntryForm } from './components/ManualEntryForm'
+import { CalendarPanel } from './components/CalendarPanel'
+import { SettingsPanel } from './components/SettingsPanel'
+import { MyDayPage } from './components/MyDayPage'
+import { HeaderSessionBar } from './components/HeaderSessionBar'
+import { useAsync } from './hooks/useAsync'
+
+export default function App() {
+  const [activeSession, setActiveSession] = useState<WorkSession | null>(null)
+  const [refreshKey, setRefreshKey] = useState(() => Date.now().toString())
+  const [activeTab, setActiveTab] = useState<'myday' | 'work' | 'leave' | 'calendar' | 'exports' | 'settings'>('myday')
+  const [workView, setWorkView] = useState<'log' | 'manual' | 'analysis'>('log')
+  const [startPlan, setStartPlan] = useState(() => ({
+    startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
+    comment: '',
+  }))
+  const [currentDay, setCurrentDay] = useState(() => dayjs().format('YYYY-MM-DD'))
+  const [daySummary, setDaySummary] = useState<DaySummary | null>(null)
+
+  const triggerRefresh = useCallback(() => setRefreshKey(Date.now().toString()), [])
+  const { run: runStart, loading: starting } = useAsync(startSession)
+  const { run: runPause, loading: pausing } = useAsync(pauseSession)
+  const { run: runStop, loading: stopping } = useAsync(stopSession)
+
+  useEffect(() => {
+    const init = async () => {
+      const today = dayjs().format('YYYY-MM-DD')
+      const sessions = await getSessionsForDay(today)
+      const current = sessions.find((session) => ['active', 'paused'].includes(session.status)) ?? null
+      setActiveSession(current)
+    }
+    init()
+  }, [])
+
+  useEffect(() => {
+    if (!activeSession) return
+    const timer = window.setInterval(() => {
+      setRefreshKey(Date.now().toString())
+    }, 60_000)
+    return () => window.clearInterval(timer)
+  }, [activeSession])
+
+  const loadSummary = useCallback(async () => {
+    const today = dayjs().format('YYYY-MM-DD')
+    setCurrentDay(today)
+    try {
+      const data = await getDaySummaries(today, today)
+      setDaySummary(data[0] ?? null)
+    } catch (error) {
+      console.error('Tagesübersicht konnte nicht geladen werden', error)
+      setDaySummary(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadSummary()
+  }, [loadSummary, refreshKey])
+
+  const handleStart = useCallback(
+    async (override?: { start_time?: string; comment?: string }) => {
+      const payload: { start_time?: string; comment?: string } = {}
+      const rawStart = override?.start_time ?? startPlan.startTime
+      const rawComment = override?.comment ?? startPlan.comment
+      if (rawStart) {
+        payload.start_time = rawStart.endsWith('Z') ? rawStart : dayjs(rawStart).toISOString()
+      }
+      if (rawComment && rawComment.trim()) {
+        payload.comment = rawComment.trim()
+      }
+      const session = await runStart(payload)
+      setActiveSession(session)
+      setStartPlan({
+        startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
+        comment: '',
+      })
+      triggerRefresh()
+    },
+    [runStart, startPlan, triggerRefresh],
+  )
+
+  const handlePauseToggle = useCallback(async () => {
+    const result = await runPause()
+    setActiveSession(result.session)
+    triggerRefresh()
+  }, [runPause, triggerRefresh])
+
+  const handleStop = useCallback(
+    async (comment?: string) => {
+      const payload: { comment?: string } = {}
+      if (comment && comment.trim()) {
+        payload.comment = comment.trim()
+      }
+      await runStop(payload)
+      setActiveSession(null)
+      triggerRefresh()
+    },
+    [runStop, triggerRefresh],
+  )
+
+  const content = useMemo(() => {
+    switch (activeTab) {
+      case 'myday':
+        return (
+          <MyDayPage
+            activeSession={activeSession}
+            startConfig={startPlan}
+            onStartConfigChange={(config) => setStartPlan(config)}
+            onStart={handleStart}
+            onStop={handleStop}
+            refreshKey={refreshKey}
+            triggerRefresh={triggerRefresh}
+          />
+        )
+      case 'work':
+        return (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-100">Arbeitszeit</h2>
+                <p className="text-sm text-slate-400">Protokoll, Nachträge und Auswertungen.</p>
+              </div>
+              <div className="inline-flex overflow-hidden rounded-md border border-slate-800">
+                {(
+                  [
+                    { key: 'log', label: 'Protokoll' },
+                    { key: 'manual', label: 'Arbeitszeit nachtragen' },
+                    { key: 'analysis', label: 'Monat/Woche/Jahr' },
+                  ] as { key: typeof workView; label: string }[]
+                ).map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setWorkView(option.key)}
+                    className={`px-3 py-1 text-xs font-medium transition-colors ${
+                      workView === option.key ? 'bg-primary text-slate-950' : 'bg-slate-950/60 text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            {workView === 'log' && <SessionList refreshKey={refreshKey} />}
+            {workView === 'manual' && <ManualEntryForm onCreated={triggerRefresh} />}
+            {workView === 'analysis' && <DaySummaryPanel refreshKey={refreshKey} />}
+          </div>
+        )
+      case 'leave':
+        return <LeaveManager refreshKey={refreshKey} onRefreshed={triggerRefresh} />
+      case 'calendar':
+        return <CalendarPanel refreshKey={refreshKey} />
+      case 'exports':
+        return <ExportPanel onExported={() => triggerRefresh()} />
+      case 'settings':
+        return <SettingsPanel />
+      default:
+        return null
+    }
+  }, [activeTab, activeSession, handleStart, handleStop, refreshKey, startPlan, triggerRefresh, workView])
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+      <header className="border-b border-slate-800 bg-slate-950/85 backdrop-blur">
+        <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <h1 className="text-2xl font-semibold text-slate-100">TimeTrack</h1>
+              <p className="text-sm text-slate-400">
+                Deine persönliche Stempeluhr – schnell, sicher und offline-freundlich.
+              </p>
+            </div>
+            <div className="text-sm text-slate-400">
+              <p>API: {API_BASE}</p>
+              <p className="mt-1">Heute: {dayjs().format('DD.MM.YYYY')}</p>
+            </div>
+          </div>
+          <HeaderSessionBar
+            activeSession={activeSession}
+            onStart={() => handleStart()}
+            onPauseToggle={handlePauseToggle}
+            onStop={() => handleStop()}
+            loading={{ start: starting, pause: pausing, stop: stopping }}
+            startPlan={startPlan}
+            day={currentDay}
+            summary={daySummary}
+          />
+          <nav className="flex flex-wrap gap-2">
+            {[
+              { key: 'myday', label: 'Mein Tag' },
+              { key: 'work', label: 'Arbeitszeit' },
+              { key: 'leave', label: 'Abwesenheiten' },
+              { key: 'calendar', label: 'Kalender' },
+              { key: 'exports', label: 'Exporte' },
+              { key: 'settings', label: 'Einstellungen' },
+            ].map((tab) => (
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key as typeof activeTab)}
+                className={`rounded-md px-4 py-2 text-sm font-medium transition-colors ${
+                  activeTab === tab.key
+                    ? 'bg-primary text-slate-950 shadow'
+                    : 'bg-slate-900/60 text-slate-300 hover:bg-slate-800'
+                }`}
+                type="button"
+              >
+                {tab.label}
+              </button>
+            ))}
+          </nav>
+        </div>
+      </header>
+      <main className="mx-auto max-w-7xl space-y-6 px-6 py-8">
+        {content}
+      </main>
+      <footer className="border-t border-slate-800 bg-slate-950/80">
+        <div className="mx-auto flex max-w-7xl flex-col items-start gap-2 px-6 py-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+          <span>TimeTrack MVP © {new Date().getFullYear()}</span>
+          <span>Made for Selbsthosting – Daten bleiben bei dir.</span>
+        </div>
+      </footer>
+    </div>
+  )
+}
