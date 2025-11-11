@@ -145,6 +145,8 @@ class CalendarEvent(Base):
     location = Column(String(200), nullable=True)
     description = Column(Text, nullable=True)
     participated = Column(Boolean, nullable=False, default=False)
+    status = Column(String(20), nullable=False, default="pending", index=True)
+    ignored = Column(Boolean, nullable=False, default=False, index=True)
     calendar_identifier = Column(String(200), nullable=True, index=True)
     external_id = Column(String(255), nullable=True, index=True)
     recurrence_id = Column(String(255), nullable=True, index=True)
@@ -152,6 +154,43 @@ class CalendarEvent(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     subtrack = relationship("WorkSubtrack", back_populates="calendar_event", uselist=False)
+
+
+class TravelTrip(Base):
+    __tablename__ = "travel_trips"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200), nullable=False)
+    start_date = Column(Date, nullable=False)
+    end_date = Column(Date, nullable=False)
+    destination = Column(String(200), nullable=True)
+    purpose = Column(Text, nullable=True)
+    workflow_state = Column(String(50), nullable=False, default="request_draft", index=True)
+    notes = Column(Text, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow, nullable=False)
+
+    documents = relationship(
+        "TravelDocument",
+        back_populates="trip",
+        cascade="all, delete-orphan",
+        order_by="TravelDocument.created_at",
+    )
+
+
+class TravelDocument(Base):
+    __tablename__ = "travel_documents"
+
+    id = Column(Integer, primary_key=True)
+    trip_id = Column(Integer, ForeignKey("travel_trips.id"), nullable=False, index=True)
+    document_type = Column(String(50), nullable=False, index=True)
+    stored_path = Column(String(255), nullable=False)
+    original_name = Column(String(255), nullable=False)
+    comment = Column(Text, nullable=True)
+    signed = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    trip = relationship("TravelTrip", back_populates="documents")
 
 
 class WorkSubtrack(Base):

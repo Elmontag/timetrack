@@ -1,10 +1,17 @@
 import dayjs from 'dayjs'
 import { useCallback, useEffect, useState } from 'react'
-import { CalendarEvent, listCalendarEvents, updateCalendarParticipation } from '../api'
+import { CalendarEvent, listCalendarEvents, updateCalendarEvent } from '../api'
 
 interface Props {
   day: string
   refreshKey: string
+}
+
+const STATUS_STYLES: Record<string, { label: string; className: string }> = {
+  pending: { label: 'Offen', className: 'text-slate-400' },
+  attended: { label: 'Teilgenommen', className: 'text-emerald-400' },
+  absent: { label: 'Nicht teilgenommen', className: 'text-amber-300' },
+  cancelled: { label: 'Hinfällig', className: 'text-rose-300' },
 }
 
 export function TodayCalendarList({ day, refreshKey }: Props) {
@@ -43,15 +50,18 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
     )
   }
 
-  const handleParticipationToggle = async (eventId: number, participated: boolean) => {
+  const handleStatusChange = async (
+    eventId: number,
+    status: 'pending' | 'attended' | 'absent' | 'cancelled',
+  ) => {
     setParticipationUpdating(eventId)
     setError(null)
     try {
-      await updateCalendarParticipation(eventId, participated)
+      await updateCalendarEvent(eventId, { status })
       await loadEvents()
     } catch (err) {
-      console.error('Teilnahmestatus konnte nicht gespeichert werden', err)
-      setError('Teilnahmestatus konnte nicht aktualisiert werden.')
+      console.error('Kalenderstatus konnte nicht gespeichert werden', err)
+      setError('Kalenderstatus konnte nicht aktualisiert werden.')
     } finally {
       setParticipationUpdating(null)
     }
@@ -89,19 +99,61 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
               <div className="mt-3 flex flex-wrap items-center justify-between gap-3 text-xs uppercase tracking-wide text-slate-500">
                 <span>
                   Status:{' '}
-                  <span className={event.participated ? 'text-emerald-400' : 'text-slate-400'}>
-                    {event.participated ? 'Teilgenommen' : 'Nicht teilgenommen'}
+                  <span
+                    className={
+                      STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className
+                    }
+                  >
+                    {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
                   </span>
                 </span>
                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide">
                   <button
                     type="button"
-                    onClick={() => handleParticipationToggle(event.id, !event.participated)}
+                    onClick={() => handleStatusChange(event.id, 'attended')}
                     disabled={participationUpdating === event.id}
-                    className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                    className={`rounded-md border px-2 py-1 text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      event.status === 'attended'
+                        ? 'border-emerald-400 text-emerald-300'
+                        : 'border-slate-700 text-slate-200 hover:border-primary hover:text-primary'
+                    }`}
                   >
-                    {event.participated ? 'auf Nicht' : 'als Teilgenommen'}
+                    Teilgenommen
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => handleStatusChange(event.id, 'absent')}
+                    disabled={participationUpdating === event.id}
+                    className={`rounded-md border px-2 py-1 text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      event.status === 'absent'
+                        ? 'border-amber-400 text-amber-300'
+                        : 'border-slate-700 text-slate-200 hover:border-primary hover:text-primary'
+                    }`}
+                  >
+                    Nicht teilgenommen
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleStatusChange(event.id, 'cancelled')}
+                    disabled={participationUpdating === event.id}
+                    className={`rounded-md border px-2 py-1 text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                      event.status === 'cancelled'
+                        ? 'border-rose-400 text-rose-300'
+                        : 'border-slate-700 text-slate-200 hover:border-primary hover:text-primary'
+                    }`}
+                  >
+                    Hinfällig
+                  </button>
+                  {event.status !== 'pending' && (
+                    <button
+                      type="button"
+                      onClick={() => handleStatusChange(event.id, 'pending')}
+                      disabled={participationUpdating === event.id}
+                      className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      Zurücksetzen
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => toggleDetails(event.id)}

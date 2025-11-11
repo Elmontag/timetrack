@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 
 def _serialize_datetime(value: dt.datetime) -> str:
@@ -206,6 +206,8 @@ class CalendarEventResponse(BaseModel):
     location: Optional[str]
     description: Optional[str]
     participated: bool
+    status: str
+    ignored: bool
     attendees: list[str]
 
     @model_serializer(mode="plain", when_used="json")
@@ -218,6 +220,8 @@ class CalendarEventResponse(BaseModel):
             "location": self.location,
             "description": self.description,
             "participated": self.participated,
+            "status": self.status,
+            "ignored": self.ignored,
             "attendees": list(self.attendees or []),
         }
 
@@ -234,11 +238,14 @@ class CalendarEventCreateRequest(BaseModel):
     location: Optional[str] = None
     description: Optional[str] = None
     participated: bool = False
+    status: Optional[str] = None
     attendees: list[str] = []
 
 
 class CalendarEventUpdateRequest(BaseModel):
-    participated: bool
+    participated: Optional[bool] = None
+    status: Optional[str] = None
+    ignored: Optional[bool] = None
 
 
 class SubtrackResponse(BaseModel):
@@ -279,6 +286,102 @@ class SubtrackCreateRequest(BaseModel):
     project: Optional[str] = None
     tags: List[str] = Field(default_factory=list)
     note: Optional[str] = None
+
+
+class TravelDocumentResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    trip_id: int
+    document_type: str
+    original_name: str
+    comment: Optional[str]
+    signed: bool
+    created_at: dt.datetime
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "trip_id": self.trip_id,
+            "document_type": self.document_type,
+            "original_name": self.original_name,
+            "comment": self.comment,
+            "signed": self.signed,
+            "created_at": _serialize_datetime(self.created_at),
+            "download_path": f"/travels/{self.trip_id}/documents/{self.id}/download",
+        }
+
+
+class TravelTripResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    start_date: dt.date
+    end_date: dt.date
+    destination: Optional[str]
+    purpose: Optional[str]
+    workflow_state: str
+    notes: Optional[str]
+    created_at: dt.datetime
+    updated_at: dt.datetime
+    documents: List[TravelDocumentResponse]
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "start_date": self.start_date,
+            "end_date": self.end_date,
+            "destination": self.destination,
+            "purpose": self.purpose,
+            "workflow_state": self.workflow_state,
+            "notes": self.notes,
+            "created_at": _serialize_datetime(self.created_at),
+            "updated_at": _serialize_datetime(self.updated_at),
+            "documents": [doc._serialize() for doc in self.documents],
+            "dataset_path": f"/travels/{self.id}/reisekostenpaket",
+            "dataset_print_path": f"/travels/{self.id}/reisekostenpaket/druck",
+        }
+
+
+class TravelTripCreateRequest(BaseModel):
+    title: str
+    start_date: dt.date
+    end_date: dt.date
+    destination: Optional[str] = None
+    purpose: Optional[str] = None
+    workflow_state: Optional[str] = None
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> "TravelTripCreateRequest":
+        if self.end_date < self.start_date:
+            raise ValueError("Enddatum darf nicht vor dem Startdatum liegen")
+        return self
+
+
+class TravelTripUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    start_date: Optional[dt.date] = None
+    end_date: Optional[dt.date] = None
+    destination: Optional[str] = None
+    purpose: Optional[str] = None
+    workflow_state: Optional[str] = None
+    notes: Optional[str] = None
+
+    @model_validator(mode="after")
+    def _validate_range(self) -> "TravelTripUpdateRequest":
+        if self.start_date and self.end_date and self.end_date < self.start_date:
+            raise ValueError("Enddatum darf nicht vor dem Startdatum liegen")
+        return self
+
+
+class TravelDocumentUpdateRequest(BaseModel):
+    comment: Optional[str] = None
+    signed: Optional[bool] = None
 
 
 class SettingsResponse(BaseModel):

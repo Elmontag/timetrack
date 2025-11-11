@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
+import clsx from 'clsx'
 import { API_BASE } from './config'
 import {
   DaySummary,
@@ -20,12 +21,16 @@ import { SettingsPanel } from './components/SettingsPanel'
 import { PermalinkLightbox } from './components/PermalinkLightbox'
 import { MyDayPage } from './components/MyDayPage'
 import { HeaderSessionBar } from './components/HeaderSessionBar'
+import { ThemeToggle, ThemeMode } from './components/ThemeToggle'
+import { TravelManager } from './components/TravelManager'
 import { useAsync } from './hooks/useAsync'
 
 export default function App() {
   const [activeSession, setActiveSession] = useState<WorkSession | null>(null)
   const [refreshKey, setRefreshKey] = useState(() => Date.now().toString())
-  const [activeTab, setActiveTab] = useState<'myday' | 'work' | 'leave' | 'calendar' | 'exports' | 'settings'>('myday')
+  const [activeTab, setActiveTab] = useState<
+    'myday' | 'work' | 'leave' | 'calendar' | 'travel' | 'exports' | 'settings'
+  >('myday')
   const [workView, setWorkView] = useState<'log' | 'manual' | 'analysis'>('log')
   const [startPlan, setStartPlan] = useState(() => ({
     startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
@@ -34,6 +39,15 @@ export default function App() {
   const [currentDay, setCurrentDay] = useState(() => dayjs().format('YYYY-MM-DD'))
   const [daySummary, setDaySummary] = useState<DaySummary | null>(null)
   const [permalinkOpen, setPermalinkOpen] = useState(false)
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    if (typeof window === 'undefined') return 'dark'
+    const stored = window.localStorage.getItem('tt-theme')
+    const initial = stored === 'light' ? 'light' : 'dark'
+    if (typeof document !== 'undefined') {
+      document.documentElement.dataset.theme = initial
+    }
+    return initial
+  })
 
   const triggerRefresh = useCallback(() => setRefreshKey(Date.now().toString()), [])
   const { run: runStart, loading: starting } = useAsync(startSession)
@@ -73,6 +87,15 @@ export default function App() {
   useEffect(() => {
     loadSummary()
   }, [loadSummary, refreshKey])
+
+  useEffect(() => {
+    if (typeof document !== 'undefined') {
+      document.documentElement.dataset.theme = theme
+    }
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('tt-theme', theme)
+    }
+  }, [theme])
 
   const handleStart = useCallback(
     async (override?: { start_time?: string; comment?: string }) => {
@@ -167,6 +190,8 @@ export default function App() {
         return <LeaveManager refreshKey={refreshKey} onRefreshed={triggerRefresh} />
       case 'calendar':
         return <CalendarPanel refreshKey={refreshKey} />
+      case 'travel':
+        return <TravelManager />
       case 'exports':
         return <ExportPanel onExported={() => triggerRefresh()} />
       case 'settings':
@@ -177,7 +202,12 @@ export default function App() {
   }, [activeTab, activeSession, handleStart, handleStop, refreshKey, startPlan, triggerRefresh, workView])
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
+    <div
+      className={clsx(
+        'min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100 transition-colors',
+        theme === 'light' && 'text-slate-900',
+      )}
+    >
       <header className="border-b border-slate-800 bg-slate-950/85 backdrop-blur">
         <div className="mx-auto max-w-7xl space-y-6 px-6 py-6">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -187,8 +217,11 @@ export default function App() {
                 Deine persönliche Stempeluhr – schnell, sicher und offline-freundlich.
               </p>
             </div>
-            <div className="text-sm text-slate-400">
-              <p>API: {API_BASE}</p>
+            <div className="flex flex-col gap-2 text-sm text-slate-400 md:items-end">
+              <div className="flex items-center gap-3">
+                <ThemeToggle theme={theme} onToggle={(mode) => setTheme(mode)} />
+                <span>API: {API_BASE}</span>
+              </div>
               <p className="mt-1">Heute: {dayjs().format('DD.MM.YYYY')}</p>
             </div>
           </div>
@@ -208,6 +241,7 @@ export default function App() {
               { key: 'work', label: 'Arbeitszeit' },
               { key: 'leave', label: 'Abwesenheiten' },
               { key: 'calendar', label: 'Kalender' },
+              { key: 'travel', label: 'Dienstreisen' },
               { key: 'exports', label: 'Exporte' },
               { key: 'settings', label: 'Einstellungen' },
             ].map((tab) => (

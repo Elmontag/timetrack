@@ -6,6 +6,99 @@
   color-scheme: dark;
 }
 
+[data-theme='light'] {
+  color-scheme: light;
+}
+
 body {
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+@layer base {
+  [data-theme='dark'] body {
+    @apply text-slate-100;
+  }
+
+  [data-theme='light'] body {
+    color: #0f172a;
+    background-color: #e7edf6;
+    background-image:
+      radial-gradient(120% 120% at 10% 10%, rgba(255, 255, 255, 0.85), transparent 55%),
+      radial-gradient(100% 120% at 90% 0%, rgba(148, 163, 184, 0.12), transparent 55%),
+      linear-gradient(180deg, #f8fafc 0%, #eef2f6 55%, #e2e8f0 100%);
+  }
+}
+
+@layer components {
+  [data-theme='light'] .text-slate-100 {
+    @apply text-slate-900;
+  }
+  [data-theme='light'] .text-slate-200 {
+    @apply text-slate-800;
+  }
+  [data-theme='light'] .text-slate-300 {
+    @apply text-slate-700;
+  }
+  [data-theme='light'] .text-slate-400 {
+    @apply text-slate-600;
+  }
+  [data-theme='light'] .text-slate-500 {
+    --tw-text-opacity: 1;
+    color: rgb(100 116 139 / var(--tw-text-opacity));
+  }
+  [data-theme='light'] .text-slate-600 {
+    @apply text-slate-500;
+  }
+  [data-theme='light'] .border-slate-800 {
+    @apply border-slate-200;
+  }
+  [data-theme='light'] .border-slate-700 {
+    @apply border-slate-300;
+  }
+  [data-theme='light'] .border-slate-600 {
+    @apply border-slate-300;
+  }
+  [data-theme='light'] .border-slate-500 {
+    @apply border-slate-200;
+  }
+  [data-theme='light'] .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+    border-color: rgba(226, 232, 240, 1);
+  }
+  [data-theme='light'] .bg-slate-950,
+  [data-theme='light'] .bg-slate-950\/90,
+  [data-theme='light'] .bg-slate-950\/85,
+  [data-theme='light'] .bg-slate-950\/80,
+  [data-theme='light'] .bg-slate-950\/70,
+  [data-theme='light'] .bg-slate-950\/60,
+  [data-theme='light'] .bg-slate-950\/50,
+  [data-theme='light'] .bg-slate-950\/40,
+  [data-theme='light'] .bg-slate-950\/30,
+  [data-theme='light'] .bg-slate-900,
+  [data-theme='light'] .bg-slate-900\/80,
+  [data-theme='light'] .bg-slate-900\/70,
+  [data-theme='light'] .bg-slate-900\/60,
+  [data-theme='light'] .bg-slate-900\/50,
+  [data-theme='light'] .bg-slate-900\/40,
+  [data-theme='light'] .bg-slate-900\/30,
+  [data-theme='light'] .bg-slate-900\/20,
+  [data-theme='light'] .bg-slate-900\/10 {
+    background-color: rgba(255, 255, 255, 0.96) !important;
+    color: #0f172a;
+    border-color: rgba(203, 213, 225, 0.85) !important;
+    box-shadow: 0 28px 60px -32px rgba(15, 23, 42, 0.35);
+    backdrop-filter: saturate(180%) blur(14px);
+  }
+  [data-theme='light'] .shadow,
+  [data-theme='light'] .shadow-lg,
+  [data-theme='light'] .shadow-xl,
+  [data-theme='light'] .shadow-2xl {
+    --tw-shadow-color: rgba(15, 23, 42, 0.15);
+  }
+  [data-theme='light'] .bg-gradient-to-br.from-slate-950.via-slate-900.to-slate-950 {
+    background-image: linear-gradient(
+      135deg,
+      rgba(255, 255, 255, 0.98),
+      rgba(226, 232, 240, 0.92)
+    );
+  }
 }
