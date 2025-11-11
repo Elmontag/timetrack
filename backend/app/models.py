@@ -145,7 +145,13 @@ class CalendarEvent(Base):
     location = Column(String(200), nullable=True)
     description = Column(Text, nullable=True)
     participated = Column(Boolean, nullable=False, default=False)
+    calendar_identifier = Column(String(200), nullable=True, index=True)
+    external_id = Column(String(255), nullable=True, index=True)
+    recurrence_id = Column(String(255), nullable=True, index=True)
+    attendees = Column(SQLiteJSON, nullable=False, default=list)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    subtrack = relationship("WorkSubtrack", back_populates="calendar_event", uselist=False)
 
 
 class WorkSubtrack(Base):
@@ -159,7 +165,10 @@ class WorkSubtrack(Base):
     project = Column(String(100), nullable=True)
     tags = Column(SQLiteJSON, nullable=False, default=list)
     note = Column(Text, nullable=True)
+    calendar_event_id = Column(Integer, ForeignKey("calendar_events.id"), nullable=True, unique=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    calendar_event = relationship("CalendarEvent", back_populates="subtrack")
 
 
 class AppSetting(Base):

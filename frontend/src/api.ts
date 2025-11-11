@@ -50,6 +50,7 @@ export interface CalendarEvent {
   location: string | null
   description: string | null
   participated: boolean
+  attendees: string[]
 }
 
 export interface SettingsResponse {
@@ -193,6 +194,7 @@ export async function createCalendarEvent(payload: {
   location?: string
   description?: string
   participated?: boolean
+  attendees?: string[]
 }) {
   const response = await client.post<CalendarEvent>('/calendar/events', payload)
   return response.data

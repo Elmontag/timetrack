@@ -197,6 +197,7 @@ class CalendarEventResponse(BaseModel):
     location: Optional[str]
     description: Optional[str]
     participated: bool
+    attendees: list[str]
 
     @model_serializer(mode="plain", when_used="json")
     def _serialize(self) -> dict[str, Any]:
@@ -208,6 +209,7 @@ class CalendarEventResponse(BaseModel):
             "location": self.location,
             "description": self.description,
             "participated": self.participated,
+            "attendees": list(self.attendees or []),
         }
 
 
@@ -223,6 +225,7 @@ class CalendarEventCreateRequest(BaseModel):
     location: Optional[str] = None
     description: Optional[str] = None
     participated: bool = False
+    attendees: list[str] = []
 
 
 class CalendarEventUpdateRequest(BaseModel):

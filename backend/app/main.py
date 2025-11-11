@@ -228,13 +228,20 @@ def create_calendar_event_entry(payload: CalendarEventCreateRequest, db: Session
         payload.location,
         payload.description,
         payload.participated,
+        payload.attendees,
     )
     return event
 
 
 @app.patch("/calendar/events/{event_id}", response_model=CalendarEventResponse)
-def update_calendar_event(event_id: int, payload: CalendarEventUpdateRequest, db: Session = Depends(get_db)) -> CalendarEventResponse:
-    event = set_calendar_participation(db, event_id, payload.participated)
+def update_calendar_event(
+    event_id: int,
+    payload: CalendarEventUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> CalendarEventResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    event = set_calendar_participation(db, state, event_id, payload.participated)
     return event
 
 

@@ -1,5 +1,5 @@
 import dayjs from 'dayjs'
-import { FormEvent, useCallback, useEffect, useState } from 'react'
+import { FormEvent, Fragment, useCallback, useEffect, useState } from 'react'
 import { CalendarEvent, createCalendarEvent, listCalendarEvents, updateCalendarParticipation } from '../api'
 
 interface Props {
@@ -22,6 +22,8 @@ export function CalendarPanel({ refreshKey }: Props) {
     description: '',
   })
   const [submitting, setSubmitting] = useState(false)
+  const [expandedRows, setExpandedRows] = useState<number[]>([])
+  const [participationUpdating, setParticipationUpdating] = useState<number | null>(null)
 
   const loadEvents = useCallback(async () => {
     setLoading(true)
@@ -42,6 +44,10 @@ export function CalendarPanel({ refreshKey }: Props) {
     loadEvents()
   }, [loadEvents, refreshKey])
 
+  useEffect(() => {
+    setExpandedRows((prev) => prev.filter((id) => events.some((event) => event.id === id)))
+  }, [events])
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
     setSubmitting(true)
@@ -61,8 +67,23 @@ export function CalendarPanel({ refreshKey }: Props) {
   }
 
   const toggleParticipation = async (eventId: number, participated: boolean) => {
-    await updateCalendarParticipation(eventId, participated)
-    await loadEvents()
+    setParticipationUpdating(eventId)
+    setError(null)
+    try {
+      await updateCalendarParticipation(eventId, participated)
+      await loadEvents()
+    } catch (err) {
+      console.error('Teilnahmestatus konnte nicht gespeichert werden', err)
+      setError('Teilnahmestatus konnte nicht aktualisiert werden.')
+    } finally {
+      setParticipationUpdating(null)
+    }
+  }
+
+  const toggleDetails = (eventId: number) => {
+    setExpandedRows((prev) =>
+      prev.includes(eventId) ? prev.filter((id) => id !== eventId) : [...prev, eventId],
+    )
   }
 
   return (
@@ -155,8 +176,8 @@ export function CalendarPanel({ refreshKey }: Props) {
             <tr>
               <th className="px-4 py-2 text-left">Termin</th>
               <th className="px-4 py-2 text-left">Zeitraum</th>
-              <th className="px-4 py-2 text-left">Ort</th>
               <th className="px-4 py-2 text-left">Status</th>
+              <th className="px-4 py-2 text-left">Details</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
@@ -174,32 +195,79 @@ export function CalendarPanel({ refreshKey }: Props) {
                 </td>
               </tr>
             )}
-            {!loading && !error && events.map((event) => (
-              <tr key={event.id} className="hover:bg-slate-900/70">
-                <td className="px-4 py-2 text-slate-100">
-                  <div className="font-medium">{event.title}</div>
-                  {event.description && <div className="text-xs text-slate-500">{event.description}</div>}
-                </td>
-                <td className="px-4 py-2 text-slate-200">
-                  {new Date(event.start_time).toLocaleString()} – {new Date(event.end_time).toLocaleString()}
-                </td>
-                <td className="px-4 py-2 text-slate-300">{event.location ?? '–'}</td>
-                <td className="px-4 py-2">
-                  <div className="inline-flex items-center gap-2">
-                    <span className={event.participated ? 'text-emerald-400' : 'text-slate-400'}>
-                      {event.participated ? 'Teilgenommen' : 'Nicht teilgenommen'}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => toggleParticipation(event.id, !event.participated)}
-                      className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-primary hover:text-primary"
-                    >
-                      {event.participated ? 'auf Nicht' : 'als Teilgenommen'}
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            ))}
+            {!loading && !error &&
+              events.map((event) => {
+                const isExpanded = expandedRows.includes(event.id)
+                return (
+                  <Fragment key={event.id}>
+                    <tr className="hover:bg-slate-900/70">
+                      <td className="px-4 py-2 text-slate-100">
+                        <div className="font-medium">{event.title}</div>
+                      </td>
+                      <td className="px-4 py-2 text-slate-200">
+                        {new Date(event.start_time).toLocaleString()} – {new Date(event.end_time).toLocaleString()}
+                      </td>
+                      <td className="px-4 py-2">
+                        <div className="inline-flex items-center gap-2">
+                          <span className={event.participated ? 'text-emerald-400' : 'text-slate-400'}>
+                            {event.participated ? 'Teilgenommen' : 'Nicht teilgenommen'}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => toggleParticipation(event.id, !event.participated)}
+                            disabled={participationUpdating === event.id}
+                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 transition hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {event.participated ? 'auf Nicht' : 'als Teilgenommen'}
+                          </button>
+                        </div>
+                      </td>
+                      <td className="px-4 py-2">
+                        <button
+                          type="button"
+                          onClick={() => toggleDetails(event.id)}
+                          className="text-xs text-primary hover:underline"
+                        >
+                          {isExpanded ? 'Details verbergen' : 'Details anzeigen'}
+                        </button>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr key={`${event.id}-details`} className="bg-slate-900/50">
+                        <td colSpan={4} className="px-4 py-3 text-sm text-slate-200">
+                          <div className="space-y-3">
+                            {event.description && (
+                              <div>
+                                <p className="text-xs uppercase tracking-wide text-slate-500">Beschreibung</p>
+                                <p className="text-slate-300">{event.description}</p>
+                              </div>
+                            )}
+                            {event.location && (
+                              <div>
+                                <p className="text-xs uppercase tracking-wide text-slate-500">Ort</p>
+                                <p className="text-slate-300">{event.location}</p>
+                              </div>
+                            )}
+                            {event.attendees.length > 0 && (
+                              <div>
+                                <p className="text-xs uppercase tracking-wide text-slate-500">Teilnehmer</p>
+                                <ul className="mt-1 list-disc space-y-1 pl-5 text-slate-300">
+                                  {event.attendees.map((attendee) => (
+                                    <li key={attendee}>{attendee}</li>
+                                  ))}
+                                </ul>
+                              </div>
+                            )}
+                            {!event.description && !event.location && event.attendees.length === 0 && (
+                              <p className="text-xs text-slate-500">Keine zusätzlichen Details vorhanden.</p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
             {!loading && !error && events.length === 0 && (
               <tr>
                 <td colSpan={4} className="px-4 py-3 text-center text-sm text-slate-400">
