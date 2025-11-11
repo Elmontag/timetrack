@@ -106,7 +106,8 @@ def fetch_caldav_calendars(state: RuntimeState) -> List[Dict[str, str]]:
         principal = client.principal()
         calendars = principal.calendars()
     except Exception as exc:  # pragma: no cover - remote errors
-        if caldav_error and isinstance(exc, caldav_error.AuthorizationError):  # type: ignore[arg-type]
+        auth_error = getattr(caldav_error, "AuthorizationError", None)
+        if auth_error and isinstance(exc, auth_error):  # type: ignore[arg-type]
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="CalDAV-Anmeldung fehlgeschlagen") from exc
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="CalDAV-Kalender konnten nicht geladen werden") from exc
 
@@ -154,7 +155,8 @@ def sync_caldav_events(
         principal = client.principal()
         calendars = principal.calendars()
     except Exception as exc:  # pragma: no cover - remote errors
-        if caldav_error and isinstance(exc, caldav_error.AuthorizationError):  # type: ignore[arg-type]
+        auth_error = getattr(caldav_error, "AuthorizationError", None)
+        if auth_error and isinstance(exc, auth_error):  # type: ignore[arg-type]
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="CalDAV-Anmeldung fehlgeschlagen") from exc
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="CalDAV-Synchronisation fehlgeschlagen") from exc
 

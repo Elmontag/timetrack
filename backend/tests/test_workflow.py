@@ -263,6 +263,25 @@ def test_caldav_calendar_listing(monkeypatch, client: TestClient):
     assert payload[1]["name"] == "Privat"
 
 
+def test_caldav_authorization_error_without_attribute(monkeypatch, client: TestClient):
+    class DummyError(Exception):
+        pass
+
+    class DummyClient:
+        def principal(self):
+            raise DummyError()
+
+    class DummyModule:
+        pass
+
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=True: DummyClient())
+    monkeypatch.setattr(services, "caldav_error", DummyModule())
+
+    resp = client.get("/caldav/calendars")
+    assert resp.status_code == 502
+    assert resp.json()["detail"] == "CalDAV-Kalender konnten nicht geladen werden"
+
+
 def test_settings_update(client: TestClient, session: Session):
     update_payload = {
         "block_ips": ["192.168.0.0/24"],
