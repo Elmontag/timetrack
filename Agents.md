@@ -12,10 +12,10 @@
 * **Urlaub & Arbeitsunfähigkeit (AU)** – separate Erfassung inkl. Genehmigungsstatus (optional), Anhang (z. B. AU‑Nachweis), Auswertung.
 * **Exporte** – Monats‑/Wochen‑Stundenzettel, Urlaubs- und AU‑Listen als **PDF** und **Excel (XLSX)**.
 * **CalDAV‑Sync** – Termine aus CalDAV‑Kalendern abrufen; **gezielt auswählen** und als Arbeitszeiteinträge übernehmen (wahlweise mit Projekt/Tag‑Mapping).
-* **Lokaler Zugriff & IP‑Allowlist** – by default nur von `127.0.0.1` erreichbar; optional Freigabe für definierte IP‑Ranges.
+* **Lokaler Zugriff & IP‑Blocklist** – lokal erreichbar; bei Bedarf gezielt Netze sperren.
 * **Offline‑freundlich** – Primär **SQLite**; alternativ **JSON‑Statefiles** für sehr schlanke/portierbare Setups.
 * **Saubere API** – dokumentiert via OpenAPI/Swagger; HMAC‑signierte Aktions‑Tokens (Permalinks) mit Ablauf & Scope.
-* **Unkomplizierte Einstellungen** Alle Einstellungen für Kalendersync, Nutzerdaten und Personendaten, IP-Allowlist, etc. können in einem übersichtlichen Einstellungsmenü angepasst werden
+* **Unkomplizierte Einstellungen** Alle Einstellungen für Kalendersync, Nutzerdaten und Personendaten, IP-Blocklist, etc. können in einem übersichtlichen Einstellungsmenü angepasst werden
 ---
 
 ## Architektur
@@ -58,7 +58,7 @@
       # Sicherheit & Netzwerk
       - TT_HOST=127.0.0.1        # Standard: nur Loopback
       - TT_PORT=8080
-      - TT_ALLOW_IPS=127.0.0.1,192.168.1.0/24  # optionale Allowlist
+      - TT_BLOCK_IPS=203.0.113.0/24            # optionale Blocklist
       - TT_BEHIND_PROXY=false     # wenn true: X-Forwarded-For beachten
       # Persistenz
       - TT_STORAGE=sqlite         # sqlite | json
@@ -78,7 +78,7 @@
       - TT_LOCALE=de-DE
 
 
-  # Optional: Reverse Proxy mit IP-Allowlist, TLS, Basic Auth
+  # Optional: Reverse Proxy mit IP-Blocklist, TLS, Basic Auth
   # proxy:
   #   image: caddy:2
   #   ports:
@@ -102,10 +102,10 @@ docker compose up -d
 
 ---
 
-## Sicherheit (lokaler Zugriff & Allowlist)
+## Sicherheit (lokaler Zugriff & Blocklist)
 
 * **Default nur localhost**: `TT_HOST=127.0.0.1`, Port nicht ins LAN exponieren.
-* **IP‑Allowlist**: `TT_ALLOW_IPS` akzeptiert CSV von IPs/CIDRs. Middleware blockt alle anderen Requests (403).
+* **IP‑Blocklist**: `TT_BLOCK_IPS` akzeptiert CSV von IPs/CIDRs. Middleware blockt ausschließlich gelistete Netze (403), alle übrigen Adressen bleiben zulässig.
 
   * Bei `TT_BEHIND_PROXY=true` wird die Quell‑IP aus `X-Forwarded-For` gelesen (nur vertrauenswürdig hinter eigenem Proxy!).
 * **Permalink‑Tokens**: HMAC‑signiert, Scope‑basiert, optional IP‑gebunden, Ablaufzeit (TTL) & einmalige Nutzung. Nur `GET` auf `/a/<token>`.
@@ -285,7 +285,7 @@ Dieses Dokument beschreibt die **Hintergrund‑Agents/Jobs** von TimeTrack, ihre
 
 ## Sicherheit & Netz
 
-* **Bind/Allowlist**: IP‑Prüfung in Startroute und Middleware; bei `TT_BEHIND_PROXY=true` nur vertrauenswürdige Proxy‑IPs zulassen.
+* **Bind/Blocklist**: IP‑Prüfung in Startroute und Middleware; bei `TT_BEHIND_PROXY=true` nur vertrauenswürdige Proxy‑IPs zulassen.
 * **Rate‑Limit**: Standard 60 req/min/IP; anpassbar. Token‑Routen separat limitiert.
 * **Header‑Härtung**: CSP, HSTS (über Proxy), X‑Frame‑Options, Referrer‑Policy.
 * **Audit‑Pflicht**: Jeder Token‑Call, blockierte IPs, Export‑Erzeugungen.
@@ -338,7 +338,7 @@ DELETE /tokens/{id}
 
 ---
 
-## Beispiel‑Caddyfile (optional, mit IP‑Allowlist + TLS)
+## Beispiel‑Caddyfile (optional, mit IP‑Blocklist + TLS)
 
 ```caddyfile
 # Caddyfile
@@ -346,9 +346,9 @@ example.tld {
     encode gzip
     tls you@example.tld
 
-    @allowIPs remote_ip 203.0.113.0/24 198.51.100.42 127.0.0.1
+    @blockIPs remote_ip 203.0.113.0/24
     respond 403 {
-        @block not @allowIPs
+        @blockIPs
     }
 
     handle_path /api* {

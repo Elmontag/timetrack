@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     environment: str = "development"
     host: str = os.getenv("TT_HOST", "127.0.0.1")
     port: int = int(os.getenv("TT_PORT", "8080"))
-    allow_ips: List[str] = Field(default_factory=lambda: ["127.0.0.1"])
+    block_ips: List[str] = Field(
+        default_factory=lambda: [ip.strip() for ip in os.getenv("TT_BLOCK_IPS", "").split(",") if ip.strip()]
+    )
     behind_proxy: bool = os.getenv("TT_BEHIND_PROXY", "false").lower() == "true"
 
     storage_backend: str = os.getenv("TT_STORAGE", "sqlite")
@@ -40,9 +42,9 @@ class Settings(BaseSettings):
 
     rate_limit_per_minute: int = int(os.getenv("TT_RATE_LIMIT", "60"))
 
-    @field_validator("allow_ips", mode="before")
+    @field_validator("block_ips", mode="before")
     @classmethod
-    def _split_allow_ips(cls, value: str | List[str]) -> List[str]:
+    def _split_block_ips(cls, value: str | List[str]) -> List[str]:
         if isinstance(value, list):
             return value
         if not value:
@@ -50,9 +52,9 @@ class Settings(BaseSettings):
         return [ip.strip() for ip in value.split(",") if ip.strip()]
 
     @computed_field
-    def allow_networks(self) -> List[ipaddress._BaseNetwork]:
+    def block_networks(self) -> List[ipaddress._BaseNetwork]:
         networks: List[ipaddress._BaseNetwork] = []
-        for entry in self.allow_ips:
+        for entry in self.block_ips:
             try:
                 networks.append(ipaddress.ip_network(entry, strict=False))
             except ValueError:

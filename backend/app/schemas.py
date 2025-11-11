@@ -154,7 +154,7 @@ class SettingsResponse(BaseModel):
     timezone: str
     locale: str
     storage: str
-    allow_ips: List[str]
+    block_ips: List[str]
     caldav_url: Optional[str]
     caldav_user: Optional[str]
     caldav_default_cal: Optional[str]
@@ -162,7 +162,7 @@ class SettingsResponse(BaseModel):
 
 
 class SettingsUpdateRequest(BaseModel):
-    allow_ips: Optional[List[str]] = None
+    block_ips: Optional[List[str]] = None
     caldav_url: Optional[str] = None
     caldav_user: Optional[str] = None
     caldav_password: Optional[str] = None

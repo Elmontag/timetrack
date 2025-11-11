@@ -243,11 +243,18 @@ def set_calendar_participation(db: Session, event_id: int, participated: bool) -
 
 def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> dict:
     normalized = dict(updates)
-    if "allow_ips" in normalized and normalized["allow_ips"] is not None:
-        if isinstance(normalized["allow_ips"], str):
-            normalized["allow_ips"] = [ip.strip() for ip in normalized["allow_ips"].split(",") if ip.strip()]
+    if "block_ips" in normalized and normalized["block_ips"] is not None:
+        if isinstance(normalized["block_ips"], str):
+            normalized["block_ips"] = [ip.strip() for ip in normalized["block_ips"].split(",") if ip.strip()]
     state.apply(normalized)
-    state.persist(db, {k: normalized[k] for k in normalized if k in {"allow_ips", "caldav_url", "caldav_user", "caldav_password", "caldav_default_cal"}})
+    state.persist(
+        db,
+        {
+            k: normalized[k]
+            for k in normalized
+            if k in {"block_ips", "caldav_url", "caldav_user", "caldav_password", "caldav_default_cal"}
+        },
+    )
     return state.snapshot()
 
 

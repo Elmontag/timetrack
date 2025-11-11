@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from . import models
 from .config import settings
 from .database import db_session, engine, get_db
-from .middleware import AllowListMiddleware
+from .middleware import BlockListMiddleware
 from .schemas import (
     ActionTokenCreateRequest,
     ActionTokenCreatedResponse,
@@ -62,7 +62,7 @@ with db_session() as session:
 
 app = FastAPI(title=settings.app_name)
 app.state.runtime_state = runtime_state
-app.add_middleware(AllowListMiddleware)
+app.add_middleware(BlockListMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://127.0.0.1:5173", "http://localhost:5173"],
@@ -243,7 +243,7 @@ def read_settings(request: Request) -> SettingsResponse:
         timezone=settings.timezone,
         locale=settings.locale,
         storage=settings.storage_backend,
-        allow_ips=snapshot["allow_ips"],
+        block_ips=snapshot["block_ips"],
         caldav_url=snapshot["caldav_url"] or None,
         caldav_user=snapshot["caldav_user"] or None,
         caldav_default_cal=snapshot["caldav_default_cal"] or None,
@@ -261,7 +261,7 @@ def write_settings(payload: SettingsUpdateRequest, request: Request, db: Session
         timezone=settings.timezone,
         locale=settings.locale,
         storage=settings.storage_backend,
-        allow_ips=snapshot["allow_ips"],
+        block_ips=snapshot["block_ips"],
         caldav_url=snapshot["caldav_url"] or None,
         caldav_user=snapshot["caldav_user"] or None,
         caldav_default_cal=snapshot["caldav_default_cal"] or None,

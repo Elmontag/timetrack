@@ -57,7 +57,7 @@ export interface SettingsResponse {
   timezone: string
   locale: string
   storage: string
-  allow_ips: string[]
+  block_ips: string[]
   caldav_url: string | null
   caldav_user: string | null
   caldav_default_cal: string | null

@@ -16,27 +16,27 @@ class RuntimeState:
 
     def __init__(self, base_settings: Settings):
         self._lock = RLock()
-        self._allow_ips: List[str] = list(base_settings.allow_ips)
-        self._allow_networks = self._build_networks(self._allow_ips)
+        self._block_ips: List[str] = list(base_settings.block_ips)
+        self._block_networks = self._build_networks(self._block_ips)
         self.caldav_url: Optional[str] = base_settings.caldav_url
         self.caldav_user: Optional[str] = base_settings.caldav_user
         self.caldav_password: Optional[str] = base_settings.caldav_password
         self.caldav_default_cal: Optional[str] = base_settings.caldav_default_cal
 
     @property
-    def allow_ips(self) -> List[str]:
+    def block_ips(self) -> List[str]:
         with self._lock:
-            return list(self._allow_ips)
+            return list(self._block_ips)
 
     @property
-    def allow_networks(self) -> Iterable[ipaddress._BaseNetwork]:
+    def block_networks(self) -> Iterable[ipaddress._BaseNetwork]:
         with self._lock:
-            return list(self._allow_networks)
+            return list(self._block_networks)
 
     def snapshot(self) -> Dict[str, Any]:
         with self._lock:
             return {
-                "allow_ips": list(self._allow_ips),
+                "block_ips": list(self._block_ips),
                 "caldav_url": self.caldav_url or "",
                 "caldav_user": self.caldav_user or "",
                 "caldav_default_cal": self.caldav_default_cal or "",
@@ -45,10 +45,10 @@ class RuntimeState:
 
     def apply(self, updates: Dict[str, Any]) -> None:
         with self._lock:
-            if "allow_ips" in updates and updates["allow_ips"] is not None:
-                allow_ips = [ip.strip() for ip in updates["allow_ips"] if ip.strip()]
-                self._allow_ips = allow_ips
-                self._allow_networks = self._build_networks(allow_ips)
+            if "block_ips" in updates and updates["block_ips"] is not None:
+                block_ips = [ip.strip() for ip in updates["block_ips"] if ip.strip()]
+                self._block_ips = block_ips
+                self._block_networks = self._build_networks(block_ips)
             if "caldav_url" in updates:
                 self.caldav_url = updates.get("caldav_url") or None
             if "caldav_user" in updates:
@@ -68,8 +68,8 @@ class RuntimeState:
             return
         decoded: Dict[str, Any] = {}
         for record in records:
-            if record.key == "allow_ips":
-                decoded["allow_ips"] = json.loads(record.value)
+            if record.key == "block_ips":
+                decoded["block_ips"] = json.loads(record.value)
             elif record.key in {
                 "caldav_url",
                 "caldav_user",
@@ -84,7 +84,7 @@ class RuntimeState:
         for key, value in updates.items():
             if value is None:
                 value = ""
-            if key == "allow_ips":
+            if key == "block_ips":
                 value = json.dumps([ip.strip() for ip in value if ip.strip()])
             if key == "caldav_password" and value == "__UNCHANGED__":
                 continue

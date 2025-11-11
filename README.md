@@ -9,7 +9,7 @@ TimeTrack ist eine selbstgehostete Stempeluhr mit React-Frontend und FastAPI-Bac
 │ Frontend (Vite + React)  │  HTTPS  │ Backend (FastAPI)      │
 │ Tailwind UI, API-Client  │◀───────▶│ SQLAlchemy + SQLite    │
 └───────────────▲──────────┘         │ Export (PDF/XLSX)      │
-                │                    │ Token & Allowlist      │
+                │                    │ Token & Blocklist      │
                 │                    └───────────▲────────────┘
                 │                                │
                 │                                │ Persistenz / Artefakte
@@ -18,7 +18,7 @@ TimeTrack ist eine selbstgehostete Stempeluhr mit React-Frontend und FastAPI-Bac
 ```
 
 * **Persistenz:** Standardmäßig SQLite (Datei in `./data/timetrack.db`). Optional kann später JSON- oder ein anderes DB-Backend ergänzt werden.
-* **Zugriffsschutz:** IP-Allowlist (default `localhost`), HMAC-signierte Tokens für Permalinks, optionale Proxy-Unterstützung.
+* **Zugriffsschutz:** IP-Blocklist (optional), HMAC-signierte Tokens für Permalinks, optionale Proxy-Unterstützung.
 * **Offline-freundlich:** keine externen Dienste nötig; alle Artefakte liegen lokal.
 
 ## Features im MVP
@@ -29,8 +29,8 @@ TimeTrack ist eine selbstgehostete Stempeluhr mit React-Frontend und FastAPI-Bac
 - 🌴 **Urlaub & Arbeitsunfähigkeit** – Erfassung inkl. Kommentar & Genehmigungsstatus
 - 📆 **Kalenderabgleich** – Termine im internen Kalender als „Teilgenommen“/„Nicht teilgenommen“ markieren
 - 📤 **Exporte** – Stundenzettel oder Abwesenheiten als PDF oder XLSX, Ablage im Export-Verzeichnis
-- 🔐 **Sicherheit** – IP-Allowlist, HMAC-Token mit TTL, optional IP-Bindung & Einmal-Token
-- ⚙️ **Einstellungsmenü** – IP-Allowlist und CalDAV-Zugangsdaten direkt in der UI pflegen
+- 🔐 **Sicherheit** – IP-Blocklist, HMAC-Token mit TTL, optional IP-Bindung & Einmal-Token
+- ⚙️ **Einstellungsmenü** – IP-Blocklist und CalDAV-Zugangsdaten direkt in der UI pflegen
 - 🛠️ **API** – REST/JSON, OpenAPI-Schema (`/docs`) und Healthcheck (`/healthz`)
 
 ## Voraussetzungen
@@ -56,7 +56,7 @@ Konfiguration via Environment-Variablen (Default-Werte siehe `backend/app/config
 export TT_HOST=127.0.0.1
 export TT_PORT=8080
 export TT_TOKEN_SECRET="super-secret"
-export TT_ALLOW_IPS="127.0.0.1,192.168.0.0/24"
+export TT_BLOCK_IPS="192.168.0.0/24"
 ```
 
 Beim ersten Start werden Datenbank & Exportordner automatisch angelegt.
@@ -81,7 +81,7 @@ docker compose up --build
 # API: http://127.0.0.1:8080  |  Frontend: http://127.0.0.1:5173
 ```
 
-Die Compose-Datei baut zwei Images (Backend & Frontend). Artefakte landen in `./data` (bind-mount). Standardmäßig erlaubt das Backend Zugriffe von `127.0.0.1` sowie dem privaten Docker-Netz (`172.16.0.0/12`), sodass das Frontend im Compose-Netzwerk kommunizieren kann. Passe `TT_ALLOW_IPS` bei Bedarf an dein tatsächliches Netz an. Für Produktion empfiehlt sich ein vorgeschalteter Reverse Proxy (TLS, Basic Auth, Rate-Limit).
+Die Compose-Datei baut zwei Images (Backend & Frontend). Artefakte landen in `./data` (bind-mount). Standardmäßig blockiert das Backend keine Adressen; bei Bedarf kannst du über `TT_BLOCK_IPS` gezielt Netze sperren (z. B. öffentliche Adressbereiche). Für Produktion empfiehlt sich ein vorgeschalteter Reverse Proxy (TLS, Basic Auth, Rate-Limit).
 
 ## Tests
 
@@ -122,7 +122,7 @@ Die React-App bietet einen klar strukturierten Flow:
 2. **Abwesenheiten:** Formular + Liste für Urlaub/AU
 3. **Kalender:** Termine importieren/erfassen und Teilnahme markieren
 4. **Exporte:** Zeitraum/Typ/Format wählen mit direktem Download
-5. **Einstellungen:** IP-Allowlist & CalDAV-Zugang per UI pflegen
+5. **Einstellungen:** IP-Blocklist & CalDAV-Zugang per UI pflegen
 
 Tailwind CSS sorgt für ein dunkles, kontrastreiches Theme, optimiert für Desktop & Tablet.
 

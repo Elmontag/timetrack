@@ -10,22 +10,22 @@ from starlette.responses import JSONResponse
 from .config import settings
 
 
-class AllowListMiddleware(BaseHTTPMiddleware):
-    """Restrict access to configured IP ranges."""
+class BlockListMiddleware(BaseHTTPMiddleware):
+    """Deny access for configured IP ranges."""
 
     async def dispatch(self, request: Request, call_next):  # type: ignore[override]
         runtime_state = getattr(request.app.state, "runtime_state", None)
         networks: Iterable[ipaddress._BaseNetwork]
         if runtime_state is not None:
-            networks = runtime_state.allow_networks
+            networks = runtime_state.block_networks
         else:
-            networks = settings.allow_networks
+            networks = settings.block_networks
         if not networks:
             return await call_next(request)
         client_ip = self._extract_client_ip(request)
-        if client_ip and self._is_allowed(client_ip, networks):
-            return await call_next(request)
-        return JSONResponse({"detail": "Access denied"}, status_code=403)
+        if client_ip and self._is_blocked(client_ip, networks):
+            return JSONResponse({"detail": "Access denied"}, status_code=403)
+        return await call_next(request)
 
     def _extract_client_ip(self, request: Request) -> str | None:
         if settings.behind_proxy:
@@ -40,13 +40,13 @@ class AllowListMiddleware(BaseHTTPMiddleware):
             return "127.0.0.1"
         return host
 
-    def _is_allowed(self, ip_str: str, networks: Iterable[ipaddress._BaseNetwork]) -> bool:
+    def _is_blocked(self, ip_str: str, networks: Iterable[ipaddress._BaseNetwork]) -> bool:
         try:
             ip = ipaddress.ip_address(ip_str)
         except ValueError:
             if ip_str in {"testclient", "localhost", "testserver"}:
-                return True
-            return False
+                return False
+            return True
         for network in networks:
             if ip in network:
                 return True

@@ -3,7 +3,7 @@ import { getSettings, SettingsResponse, updateSettings } from '../api'
 
 export function SettingsPanel() {
   const [settings, setSettings] = useState<SettingsResponse | null>(null)
-  const [allowIps, setAllowIps] = useState('')
+  const [blockIps, setBlockIps] = useState('')
   const [caldavUrl, setCaldavUrl] = useState('')
   const [caldavUser, setCaldavUser] = useState('')
   const [caldavDefaultCal, setCaldavDefaultCal] = useState('')
@@ -16,7 +16,7 @@ export function SettingsPanel() {
     const run = async () => {
       const data = await getSettings()
       setSettings(data)
-      setAllowIps(data.allow_ips.join(', '))
+      setBlockIps(data.block_ips.join(', '))
       setCaldavUrl(data.caldav_url ?? '')
       setCaldavUser(data.caldav_user ?? '')
       setCaldavDefaultCal(data.caldav_default_cal ?? '')
@@ -34,7 +34,7 @@ export function SettingsPanel() {
     setFeedback(null)
     try {
       const payload: Record<string, unknown> = {
-        allow_ips: allowIps.split(',').map((entry) => entry.trim()).filter(Boolean),
+        block_ips: blockIps.split(',').map((entry) => entry.trim()).filter(Boolean),
         caldav_url: caldavUrl || null,
         caldav_user: caldavUser || null,
         caldav_default_cal: caldavDefaultCal || null,
@@ -44,6 +44,7 @@ export function SettingsPanel() {
       }
       const updated = await updateSettings(payload)
       setSettings(updated)
+      setBlockIps(updated.block_ips.join(', '))
       setFeedback('success')
       setPasswordUpdate(false)
       setCaldavPassword('')
@@ -58,7 +59,7 @@ export function SettingsPanel() {
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
       <h2 className="text-lg font-semibold text-slate-100">Einstellungen</h2>
-      <p className="text-sm text-slate-400">IP-Allowlist und CalDAV-Verbindung zentral verwalten.</p>
+      <p className="text-sm text-slate-400">IP-Blocklist und CalDAV-Verbindung zentral verwalten.</p>
       <dl className="mt-4 grid gap-3 sm:grid-cols-2">
         <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-sm text-slate-300">
           <dt className="font-medium text-slate-100">Umgebung</dt>
@@ -72,16 +73,16 @@ export function SettingsPanel() {
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
         <div>
           <label className="text-sm text-slate-300">
-            IP-Allowlist
+            IP-Blocklist
             <textarea
-              value={allowIps}
-              onChange={(event) => setAllowIps(event.target.value)}
+              value={blockIps}
+              onChange={(event) => setBlockIps(event.target.value)}
               rows={3}
               placeholder="z. B. 127.0.0.1, 192.168.0.0/24"
               className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
             />
           </label>
-          <p className="mt-1 text-xs text-slate-500">Kommagetrennt, unterstützt IPs und CIDR-Bereiche.</p>
+          <p className="mt-1 text-xs text-slate-500">Kommagetrennt, unterstützt IPs und CIDR-Bereiche. Alle anderen Adressen bleiben zugelassen.</p>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="text-sm text-slate-300">

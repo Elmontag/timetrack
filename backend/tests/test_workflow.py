@@ -151,7 +151,7 @@ def test_calendar_event_participation(client: TestClient):
 
 def test_settings_update(client: TestClient, session: Session):
     update_payload = {
-        "allow_ips": ["127.0.0.1", "192.168.0.0/24"],
+        "block_ips": ["192.168.0.0/24"],
         "caldav_url": "https://cal.example.com",
         "caldav_user": "user",
         "caldav_default_cal": "Work",
@@ -159,7 +159,7 @@ def test_settings_update(client: TestClient, session: Session):
     resp = client.put("/settings", json=update_payload)
     assert resp.status_code == 200
     data = resp.json()
-    assert "192.168.0.0/24" in data["allow_ips"]
+    assert "192.168.0.0/24" in data["block_ips"]
     assert data["caldav_url"] == "https://cal.example.com"
 
     stored = session.query(models.AppSetting).all()
