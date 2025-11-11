@@ -88,6 +88,14 @@ class DaySummaryResponse(BaseModel):
     work_seconds: int
     pause_seconds: int
     overtime_seconds: int
+    expected_seconds: int
+    vacation_seconds: int
+    sick_seconds: int
+    is_weekend: bool
+    is_holiday: bool
+    holiday_name: Optional[str] = None
+    leave_types: List[str]
+    baseline_expected_seconds: Optional[int] = None
 
 
 class LeaveEntryResponse(BaseModel):
@@ -98,6 +106,7 @@ class LeaveEntryResponse(BaseModel):
     type: str
     comment: Optional[str]
     approved: bool
+    day_count: float
 
 
 class LeaveCreateRequest(BaseModel):
@@ -285,6 +294,8 @@ class SettingsResponse(BaseModel):
     caldav_password_set: bool
     expected_daily_hours: Optional[float]
     expected_weekly_hours: Optional[float]
+    vacation_days_per_year: float
+    vacation_days_carryover: float
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -296,3 +307,22 @@ class SettingsUpdateRequest(BaseModel):
     caldav_selected_calendars: Optional[List[str]] = None
     expected_daily_hours: Optional[float] = Field(default=None, ge=0)
     expected_weekly_hours: Optional[float] = Field(default=None, ge=0)
+    vacation_days_per_year: Optional[float] = Field(default=None, ge=0)
+    vacation_days_carryover: Optional[float] = Field(default=None)
+
+
+class HolidayResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    day: dt.date
+    name: str
+    source: str
+
+
+class HolidayCreateRequest(BaseModel):
+    day: dt.date
+    name: str
+
+
+class HolidayImportRequest(BaseModel):
+    content: str

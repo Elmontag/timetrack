@@ -17,6 +17,7 @@ import { ExportPanel } from './components/ExportPanel'
 import { ManualEntryForm } from './components/ManualEntryForm'
 import { CalendarPanel } from './components/CalendarPanel'
 import { SettingsPanel } from './components/SettingsPanel'
+import { PermalinkLightbox } from './components/PermalinkLightbox'
 import { MyDayPage } from './components/MyDayPage'
 import { HeaderSessionBar } from './components/HeaderSessionBar'
 import { useAsync } from './hooks/useAsync'
@@ -32,6 +33,7 @@ export default function App() {
   }))
   const [currentDay, setCurrentDay] = useState(() => dayjs().format('YYYY-MM-DD'))
   const [daySummary, setDaySummary] = useState<DaySummary | null>(null)
+  const [permalinkOpen, setPermalinkOpen] = useState(false)
 
   const triggerRefresh = useCallback(() => setRefreshKey(Date.now().toString()), [])
   const { run: runStart, loading: starting } = useAsync(startSession)
@@ -229,11 +231,19 @@ export default function App() {
         {content}
       </main>
       <footer className="border-t border-slate-800 bg-slate-950/80">
-        <div className="mx-auto flex max-w-7xl flex-col items-start gap-2 px-6 py-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
+        <div className="mx-auto flex max-w-7xl flex-col items-start gap-3 px-6 py-4 text-xs text-slate-500 sm:flex-row sm:items-center sm:justify-between">
           <span>TimeTrack MVP © {new Date().getFullYear()}</span>
+          <button
+            type="button"
+            onClick={() => setPermalinkOpen(true)}
+            className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1 text-xs font-medium text-slate-300 transition hover:border-primary hover:text-primary"
+          >
+            Permalink-Aktionen öffnen
+          </button>
           <span>Made for Selbsthosting – Daten bleiben bei dir.</span>
         </div>
       </footer>
+      <PermalinkLightbox open={permalinkOpen} onClose={() => setPermalinkOpen(false)} />
     </div>
   )
 }

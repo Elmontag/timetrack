@@ -24,6 +24,9 @@ from .schemas import (
     DaySummaryResponse,
     ExportRequest,
     ExportResponse,
+    HolidayCreateRequest,
+    HolidayImportRequest,
+    HolidayResponse,
     LeaveCreateRequest,
     LeaveEntryResponse,
     SubtrackCreateRequest,
@@ -39,12 +42,16 @@ from .schemas import (
 )
 from .services import (
     create_calendar_event,
+    create_holiday,
     create_subtrack,
     create_leave,
+    delete_holiday,
     fetch_caldav_calendars,
     create_manual_session,
     export_sessions,
+    import_holidays_from_ics,
     list_calendar_events,
+    list_holidays,
     list_leaves,
     list_subtracks,
     list_sessions_for_day,
@@ -200,6 +207,31 @@ def get_leaves(from_date: Optional[dt.date] = None, to_date: Optional[dt.date] =
     return list_leaves(db, from_date, to_date, type)
 
 
+@app.get("/holidays", response_model=list[HolidayResponse])
+def get_holidays(
+    from_date: Optional[dt.date] = None,
+    to_date: Optional[dt.date] = None,
+    db: Session = Depends(get_db),
+) -> list[HolidayResponse]:
+    return list_holidays(db, from_date, to_date)
+
+
+@app.post("/holidays", response_model=HolidayResponse, status_code=status.HTTP_201_CREATED)
+def create_holiday_entry(payload: HolidayCreateRequest, db: Session = Depends(get_db)) -> HolidayResponse:
+    return create_holiday(db, payload.day, payload.name)
+
+
+@app.delete("/holidays/{holiday_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_holiday(holiday_id: int, db: Session = Depends(get_db)) -> Response:
+    delete_holiday(db, holiday_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/holidays/import", response_model=list[HolidayResponse])
+def import_holiday_file(payload: HolidayImportRequest, db: Session = Depends(get_db)) -> list[HolidayResponse]:
+    return import_holidays_from_ics(db, payload.content)
+
+
 @app.get("/calendar/events", response_model=list[CalendarEventResponse])
 def get_calendar_events(
     request: Request,
@@ -246,8 +278,13 @@ def update_calendar_event(
 
 
 @app.post("/exports", response_model=ExportResponse, status_code=status.HTTP_201_CREATED)
-def create_export(payload: ExportRequest, db: Session = Depends(get_db)) -> ExportResponse:
-    export = export_sessions(db, payload.type, payload.format, payload.range_start, payload.range_end)
+def create_export(
+    payload: ExportRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> ExportResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    export = export_sessions(db, state, payload.type, payload.format, payload.range_start, payload.range_end)
     return export
 
 
@@ -343,6 +380,8 @@ def read_settings(request: Request) -> SettingsResponse:
         caldav_password_set=snapshot["caldav_password_set"],
         expected_daily_hours=snapshot["expected_daily_hours"],
         expected_weekly_hours=snapshot["expected_weekly_hours"],
+        vacation_days_per_year=snapshot["vacation_days_per_year"],
+        vacation_days_carryover=snapshot["vacation_days_carryover"],
     )
 
 
@@ -364,4 +403,6 @@ def write_settings(payload: SettingsUpdateRequest, request: Request, db: Session
         caldav_password_set=snapshot["caldav_password_set"],
         expected_daily_hours=snapshot["expected_daily_hours"],
         expected_weekly_hours=snapshot["expected_weekly_hours"],
+        vacation_days_per_year=snapshot["vacation_days_per_year"],
+        vacation_days_carryover=snapshot["vacation_days_carryover"],
     )

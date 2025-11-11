@@ -1,6 +1,7 @@
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { createLeave, LeaveEntry, listLeaves } from '../api'
+import { createLeave, getSettings, LeaveEntry, listLeaves } from '../api'
+import { HolidayManagerLightbox } from './HolidayManagerLightbox'
 
 interface Props {
   refreshKey: string
@@ -22,27 +23,59 @@ export function LeaveManager({ refreshKey, onRefreshed }: Props) {
     comment: '',
     approved: true,
   })
+  const [vacationAllowance, setVacationAllowance] = useState(0)
+  const [vacationCarryover, setVacationCarryover] = useState(0)
+  const [holidayModalOpen, setHolidayModalOpen] = useState(false)
+
+  const loadData = useCallback(async () => {
+    const [leaveData, settings] = await Promise.all([
+      listLeaves({ from_date: dayjs().startOf('year').format('YYYY-MM-DD'), to_date: dayjs().endOf('year').format('YYYY-MM-DD') }),
+      getSettings(),
+    ])
+    setEntries(leaveData)
+    setVacationAllowance(settings.vacation_days_per_year)
+    setVacationCarryover(settings.vacation_days_carryover)
+  }, [])
 
   useEffect(() => {
-    const run = async () => {
-      const data = await listLeaves({ from_date: dayjs().startOf('year').format('YYYY-MM-DD'), to_date: dayjs().endOf('year').format('YYYY-MM-DD') })
-      setEntries(data)
-    }
-    run()
-  }, [refreshKey])
+    loadData()
+  }, [loadData, refreshKey])
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
     await createLeave(form)
     onRefreshed()
-    const data = await listLeaves({ from_date: dayjs().startOf('year').format('YYYY-MM-DD'), to_date: dayjs().endOf('year').format('YYYY-MM-DD') })
-    setEntries(data)
+    await loadData()
   }
+
+  const vacationStats = useMemo(() => {
+    const used = entries
+      .filter((entry) => entry.type === 'vacation')
+      .reduce((sum, entry) => sum + entry.day_count, 0)
+    const total = vacationAllowance + vacationCarryover
+    const remaining = Math.max(total - used, 0)
+    return {
+      used,
+      total,
+      remaining,
+    }
+  }, [entries, vacationAllowance, vacationCarryover])
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4">
-      <h2 className="text-lg font-semibold text-slate-100">Abwesenheiten</h2>
-      <p className="text-sm text-slate-400">Urlaub und Arbeitsunfähigkeit im Blick behalten.</p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h2 className="text-lg font-semibold text-slate-100">Abwesenheiten</h2>
+          <p className="text-sm text-slate-400">Urlaub und Arbeitsunfähigkeit im Blick behalten.</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setHolidayModalOpen(true)}
+          className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-primary hover:text-primary"
+        >
+          Feiertage verwalten
+        </button>
+      </div>
       <form onSubmit={handleSubmit} className="mt-3 grid gap-3 md:grid-cols-4">
         <label className="text-sm text-slate-300">
           Von
@@ -106,6 +139,21 @@ export function LeaveManager({ refreshKey, onRefreshed }: Props) {
           </button>
         </div>
       </form>
+      <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+          <dt className="text-xs uppercase tracking-wide text-slate-400">Urlaub gesamt</dt>
+          <dd className="mt-1 text-xl font-semibold text-slate-100">{vacationStats.total.toFixed(1)} Tage</dd>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+          <dt className="text-xs uppercase tracking-wide text-slate-400">Verbraucht</dt>
+          <dd className="mt-1 text-xl font-semibold text-slate-100">{vacationStats.used.toFixed(1)} Tage</dd>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/50 p-3">
+          <dt className="text-xs uppercase tracking-wide text-slate-400">Rest</dt>
+          <dd className="mt-1 text-xl font-semibold text-slate-100">{vacationStats.remaining.toFixed(1)} Tage</dd>
+          <p className="text-[11px] text-slate-500">inkl. Übertrag: {vacationCarryover.toFixed(1)} Tage</p>
+        </div>
+      </dl>
       <div className="mt-4 max-h-56 overflow-y-auto rounded-lg border border-slate-800">
         <table className="min-w-full divide-y divide-slate-800 text-sm">
           <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-400">
@@ -113,6 +161,7 @@ export function LeaveManager({ refreshKey, onRefreshed }: Props) {
               <th className="px-4 py-2 text-left">Zeitraum</th>
               <th className="px-4 py-2 text-left">Typ</th>
               <th className="px-4 py-2 text-left">Kommentar</th>
+              <th className="px-4 py-2 text-left">Tage</th>
               <th className="px-4 py-2 text-left">Status</th>
             </tr>
           </thead>
@@ -123,13 +172,21 @@ export function LeaveManager({ refreshKey, onRefreshed }: Props) {
                   {entry.start_date} – {entry.end_date}
                 </td>
                 <td className="px-4 py-2 text-slate-100">{leaveTypes.find((item) => item.value === entry.type)?.label ?? entry.type}</td>
-                <td className="px-4 py-2 text-slate-300">{entry.comment}</td>
+                <td className="px-4 py-2 text-slate-300">{entry.comment || '—'}</td>
+                <td className="px-4 py-2 text-slate-100">{entry.day_count.toFixed(1)}</td>
                 <td className="px-4 py-2 text-slate-300">{entry.approved ? 'genehmigt' : 'offen'}</td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      <HolidayManagerLightbox
+        open={holidayModalOpen}
+        onClose={() => setHolidayModalOpen(false)}
+        onUpdated={async () => {
+          await loadData()
+        }}
+      />
     </div>
   )
 }

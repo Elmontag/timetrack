@@ -52,6 +52,9 @@ class Settings(BaseSettings):
         else None
     )
 
+    vacation_days_per_year: float = float(os.getenv("TT_VACATION_DAYS", "30"))
+    vacation_days_carryover: float = float(os.getenv("TT_VACATION_DAYS_CARRYOVER", "0"))
+
     token_secret: str = os.getenv("TT_TOKEN_SECRET", "change-me")
 
     rate_limit_per_minute: int = int(os.getenv("TT_RATE_LIMIT", "60"))

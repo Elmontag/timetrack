@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import datetime as dt
+import re
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from zoneinfo import ZoneInfo
 
@@ -16,7 +17,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .models import CalendarEvent, DaySummary, ExportRecord, LeaveEntry, WorkSession, WorkSubtrack
+from .models import CalendarEvent, DaySummary, ExportRecord, Holiday, LeaveEntry, WorkSession, WorkSubtrack
 from .state import RuntimeState
 from .utils import normalize_calendar_identifier, normalize_calendar_selection
 
@@ -675,6 +676,60 @@ def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
     return sessions
 
 
+def _list_holidays(db: Session, start_day: dt.date, end_day: dt.date) -> List[Holiday]:
+    return (
+        db.query(Holiday)
+        .filter(and_(Holiday.day >= start_day, Holiday.day <= end_day))
+        .order_by(Holiday.day.asc())
+        .all()
+    )
+
+
+def _holiday_lookup(db: Session, start_day: dt.date, end_day: dt.date) -> Dict[dt.date, Holiday]:
+    holidays = _list_holidays(db, start_day, end_day)
+    return {holiday.day: holiday for holiday in holidays}
+
+
+def _leave_day_map(db: Session, start_day: dt.date, end_day: dt.date) -> Dict[dt.date, Set[str]]:
+    leaves = (
+        db.query(LeaveEntry)
+        .filter(
+            and_(
+                LeaveEntry.end_date >= start_day,
+                LeaveEntry.start_date <= end_day,
+            )
+        )
+        .all()
+    )
+    mapping: Dict[dt.date, Set[str]] = defaultdict(set)
+    for entry in leaves:
+        current = max(entry.start_date, start_day)
+        final = min(entry.end_date, end_day)
+        while current <= final:
+            mapping[current].add(entry.type)
+            current += dt.timedelta(days=1)
+    return mapping
+
+
+def _calculate_daily_context(
+    day: dt.date,
+    state: RuntimeState,
+    leave_types: Set[str],
+    holiday: Optional[Holiday],
+) -> Tuple[int, int, int, int, bool, bool]:
+    base_expected = _expected_daily_seconds(state)
+    is_weekend = day.weekday() >= 5
+    is_holiday = holiday is not None
+    expected = base_expected
+    if is_weekend or is_holiday or "sick" in leave_types:
+        expected = 0
+    vacation_seconds = 0
+    if "vacation" in leave_types and not (is_weekend or is_holiday):
+        vacation_seconds = base_expected
+    sick_seconds = base_expected if "sick" in leave_types else 0
+    return expected, base_expected, vacation_seconds, sick_seconds, is_weekend, is_holiday
+
+
 def _aggregate_sessions(
     db: Session,
     start_day: dt.date,
@@ -711,12 +766,17 @@ def _aggregate_sessions(
 
 def update_day_summary(db: Session, day: dt.date, state: RuntimeState) -> DaySummary:
     totals = _aggregate_sessions(db, day, day)
-    expected = _expected_daily_seconds(state)
+    leave_map = _leave_day_map(db, day, day)
+    holiday_map = _holiday_lookup(db, day, day)
+    leave_types = leave_map.get(day, set())
+    expected, _base_expected, vacation_seconds, _sick_seconds, _is_weekend, _is_holiday = _calculate_daily_context(
+        day, state, leave_types, holiday_map.get(day)
+    )
     summary = db.query(DaySummary).filter(DaySummary.day == day).one_or_none() or DaySummary(day=day)
     day_totals = totals.get(day, {"work": 0, "pause": 0})
     summary.work_seconds = day_totals["work"]
     summary.pause_seconds = day_totals["pause"]
-    summary.overtime_seconds = summary.work_seconds - expected
+    summary.overtime_seconds = summary.work_seconds + vacation_seconds - expected
     summary.updated_at = _now()
     db.add(summary)
     db.commit()
@@ -724,22 +784,37 @@ def update_day_summary(db: Session, day: dt.date, state: RuntimeState) -> DaySum
     return summary
 
 
-def range_day_summaries(db: Session, start_day: dt.date, end_day: dt.date, state: RuntimeState) -> List[DaySummary]:
+def range_day_summaries(db: Session, start_day: dt.date, end_day: dt.date, state: RuntimeState) -> List[Dict[str, Any]]:
     totals = _aggregate_sessions(db, start_day, end_day)
-    expected = _expected_daily_seconds(state)
-    summaries: List[DaySummary] = []
+    leave_map = _leave_day_map(db, start_day, end_day)
+    holiday_map = _holiday_lookup(db, start_day, end_day)
+    summaries: List[Dict[str, Any]] = []
     current = start_day
-    now = _now()
     while current <= end_day:
         totals_for_day = totals.get(current, {"work": 0, "pause": 0})
-        summary = DaySummary(
-            day=current,
-            work_seconds=totals_for_day["work"],
-            pause_seconds=totals_for_day["pause"],
-            overtime_seconds=totals_for_day["work"] - expected,
-            updated_at=now,
+        leave_types = leave_map.get(current, set())
+        expected, base_expected, vacation_seconds, sick_seconds, is_weekend, is_holiday = _calculate_daily_context(
+            current, state, leave_types, holiday_map.get(current)
         )
-        summaries.append(summary)
+        work_seconds = totals_for_day["work"]
+        pause_seconds = totals_for_day["pause"]
+        overtime_seconds = work_seconds + vacation_seconds - expected
+        summaries.append(
+            {
+                "day": current,
+                "work_seconds": work_seconds,
+                "pause_seconds": pause_seconds,
+                "overtime_seconds": overtime_seconds,
+                "expected_seconds": expected,
+                "vacation_seconds": vacation_seconds,
+                "sick_seconds": sick_seconds,
+                "is_weekend": is_weekend,
+                "is_holiday": is_holiday,
+                "holiday_name": holiday_map.get(current).name if is_holiday else None,
+                "leave_types": sorted(leave_types),
+                "baseline_expected_seconds": base_expected,
+            }
+        )
         current += dt.timedelta(days=1)
     return summaries
 
@@ -848,7 +923,14 @@ def list_subtracks(db: Session, day: dt.date) -> List[WorkSubtrack]:
     )
 
 
-def create_leave(db: Session, start_date: dt.date, end_date: dt.date, leave_type: str, comment: Optional[str], approved: bool) -> LeaveEntry:
+def create_leave(
+    db: Session,
+    start_date: dt.date,
+    end_date: dt.date,
+    leave_type: str,
+    comment: Optional[str],
+    approved: bool,
+) -> Dict[str, Any]:
     if end_date < start_date:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="End date must be after start date")
     entry = LeaveEntry(
@@ -861,10 +943,31 @@ def create_leave(db: Session, start_date: dt.date, end_date: dt.date, leave_type
     db.add(entry)
     db.commit()
     db.refresh(entry)
-    return entry
+    holiday_lookup = _holiday_lookup(db, entry.start_date, entry.end_date)
+    return {
+        "id": entry.id,
+        "start_date": entry.start_date,
+        "end_date": entry.end_date,
+        "type": entry.type,
+        "comment": entry.comment,
+        "approved": bool(entry.approved),
+        "day_count": _effective_leave_days(entry, holiday_lookup),
+    }
 
 
-def list_leaves(db: Session, start_date: Optional[dt.date], end_date: Optional[dt.date], leave_type: Optional[str]) -> List[LeaveEntry]:
+def _effective_leave_days(entry: LeaveEntry, holiday_lookup: Dict[dt.date, Holiday]) -> float:
+    count = 0.0
+    current = entry.start_date
+    while current <= entry.end_date:
+        if current.weekday() >= 5 or current in holiday_lookup:
+            current += dt.timedelta(days=1)
+            continue
+        count += 1
+        current += dt.timedelta(days=1)
+    return count
+
+
+def list_leaves(db: Session, start_date: Optional[dt.date], end_date: Optional[dt.date], leave_type: Optional[str]) -> List[Dict[str, Any]]:
     query = db.query(LeaveEntry)
     if start_date:
         query = query.filter(LeaveEntry.start_date >= start_date)
@@ -872,7 +975,131 @@ def list_leaves(db: Session, start_date: Optional[dt.date], end_date: Optional[d
         query = query.filter(LeaveEntry.end_date <= end_date)
     if leave_type:
         query = query.filter(LeaveEntry.type == leave_type)
-    return query.order_by(LeaveEntry.start_date.asc()).all()
+    entries = query.order_by(LeaveEntry.start_date.asc()).all()
+    if not entries:
+        return []
+    range_start = min(entry.start_date for entry in entries)
+    range_end = max(entry.end_date for entry in entries)
+    holiday_lookup = _holiday_lookup(db, range_start, range_end)
+    results: List[Dict[str, Any]] = []
+    for entry in entries:
+        day_count = _effective_leave_days(entry, holiday_lookup)
+        results.append(
+            {
+                "id": entry.id,
+                "start_date": entry.start_date,
+                "end_date": entry.end_date,
+                "type": entry.type,
+                "comment": entry.comment,
+                "approved": bool(entry.approved),
+                "day_count": day_count,
+            }
+        )
+    return results
+
+
+def list_holidays(db: Session, start_date: Optional[dt.date], end_date: Optional[dt.date]) -> List[Holiday]:
+    query = db.query(Holiday)
+    if start_date:
+        query = query.filter(Holiday.day >= start_date)
+    if end_date:
+        query = query.filter(Holiday.day <= end_date)
+    return query.order_by(Holiday.day.asc()).all()
+
+
+def create_holiday(db: Session, day: dt.date, name: str, source: str = "manual") -> Holiday:
+    existing = db.query(Holiday).filter(Holiday.day == day).one_or_none()
+    if existing:
+        existing.name = name
+        existing.source = source
+        db.add(existing)
+        db.commit()
+        db.refresh(existing)
+        return existing
+    holiday = Holiday(day=day, name=name, source=source)
+    db.add(holiday)
+    db.commit()
+    db.refresh(holiday)
+    return holiday
+
+
+def delete_holiday(db: Session, holiday_id: int) -> None:
+    holiday = db.get(Holiday, holiday_id)
+    if not holiday:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Holiday not found")
+    db.delete(holiday)
+    db.commit()
+
+
+def _parse_ics_holidays(content: str) -> List[Tuple[dt.date, str]]:
+    if not content.strip():
+        return []
+    normalized = content.replace("\r\n", "\n")
+    normalized = re.sub(r"\n[ \t]", "", normalized)
+    events: Dict[dt.date, str] = {}
+    inside = False
+    current_date: Optional[dt.date] = None
+    current_summary: Optional[str] = None
+    for raw_line in normalized.splitlines():
+        line = raw_line.strip()
+        if line == "BEGIN:VEVENT":
+            inside = True
+            current_date = None
+            current_summary = None
+            continue
+        if line == "END:VEVENT":
+            if inside and current_date:
+                events[current_date] = current_summary or "Feiertag"
+            inside = False
+            continue
+        if not inside:
+            continue
+        if line.startswith("SUMMARY"):
+            try:
+                _, value = line.split(":", 1)
+            except ValueError:
+                continue
+            current_summary = value.strip()
+            continue
+        if line.startswith("DTSTART"):
+            try:
+                _, value = line.split(":", 1)
+            except ValueError:
+                continue
+            value = value.strip()
+            parsed: Optional[dt.date] = None
+            for fmt in ("%Y%m%d", "%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S"):
+                try:
+                    parsed_dt = dt.datetime.strptime(value, fmt)
+                except ValueError:
+                    continue
+                else:
+                    parsed = parsed_dt.date()
+                    break
+            if parsed:
+                current_date = parsed
+    return sorted(events.items(), key=lambda item: item[0])
+
+
+def import_holidays_from_ics(db: Session, content: str) -> List[Holiday]:
+    parsed = _parse_ics_holidays(content)
+    if not parsed:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="ICS-Datei enthält keine Feiertage")
+    affected: Dict[dt.date, Holiday] = {}
+    for day, name in parsed:
+        holiday = db.query(Holiday).filter(Holiday.day == day).one_or_none()
+        if holiday:
+            holiday.name = name
+            holiday.source = "ics"
+            affected[day] = holiday
+        else:
+            holiday = Holiday(day=day, name=name, source="ics")
+            db.add(holiday)
+            affected[day] = holiday
+    db.commit()
+    for holiday in affected.values():
+        db.refresh(holiday)
+    return sorted(affected.values(), key=lambda item: item.day)
 
 
 def create_calendar_event(
@@ -1018,6 +1245,8 @@ def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> 
                 "caldav_selected_calendars",
                 "expected_daily_hours",
                 "expected_weekly_hours",
+                "vacation_days_per_year",
+                "vacation_days_carryover",
             }
         },
     )
@@ -1063,12 +1292,85 @@ def _write_xlsx(path: Path, sessions: Iterable[WorkSession]) -> None:
     wb.save(path)
 
 
-def export_sessions(db: Session, export_type: str, export_format: str, start_date: dt.date, end_date: dt.date) -> ExportRecord:
-    if export_type not in {"timesheet", "leave"}:
+def _seconds_to_hours(seconds: int) -> float:
+    return round(seconds / 3600, 2)
+
+
+def _collect_full_export_data(
+    db: Session, state: RuntimeState, start_date: dt.date, end_date: dt.date
+) -> List[Tuple[str, float, float]]:
+    summaries = range_day_summaries(db, start_date, end_date, state)
+    work_seconds = sum(item["work_seconds"] for item in summaries)
+    vacation_seconds = sum(item["vacation_seconds"] for item in summaries)
+    sick_seconds = sum(item["sick_seconds"] for item in summaries)
+    work_days = sum(1 for item in summaries if item["work_seconds"] > 0)
+    vacation_days = 0.0
+    sick_days = 0.0
+    for item in summaries:
+        baseline = item.get("baseline_expected_seconds") or _expected_daily_seconds(state)
+        if item["vacation_seconds"] > 0 and baseline:
+            vacation_days += item["vacation_seconds"] / baseline
+        if item["sick_seconds"] > 0 and baseline:
+            sick_days += item["sick_seconds"] / baseline
+    return [
+        ("Arbeitstage", float(work_days), _seconds_to_hours(work_seconds)),
+        ("Urlaubstage", round(vacation_days, 2), _seconds_to_hours(vacation_seconds)),
+        ("AU-Tage", round(sick_days, 2), _seconds_to_hours(sick_seconds)),
+    ]
+
+
+def _write_full_pdf(path: Path, title: str, rows: List[Tuple[str, float, float]]) -> None:
+    pdf = canvas.Canvas(str(path), pagesize=A4)
+    width, height = A4
+    y = height - 2 * cm
+    pdf.setTitle(title)
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(2 * cm, y, title)
+    y -= 1.2 * cm
+    pdf.setFont("Helvetica", 12)
+    headers = ["Kategorie", "Tage", "Stunden"]
+    column_widths = [8 * cm, 4 * cm, 4 * cm]
+    pdf.drawString(2 * cm, y, headers[0])
+    pdf.drawString(2 * cm + column_widths[0], y, headers[1])
+    pdf.drawString(2 * cm + column_widths[0] + column_widths[1], y, headers[2])
+    y -= 0.8 * cm
+    pdf.setFont("Helvetica", 11)
+    for category, days, hours in rows:
+        pdf.drawString(2 * cm, y, category)
+        pdf.drawRightString(2 * cm + column_widths[0] + column_widths[1] - 0.2 * cm, y, f"{days:.2f}")
+        pdf.drawRightString(width - 2 * cm, y, f"{hours:.2f}")
+        y -= 0.7 * cm
+        if y < 2 * cm:
+            pdf.showPage()
+            y = height - 2 * cm
+            pdf.setFont("Helvetica", 11)
+    pdf.save()
+
+
+def _write_full_xlsx(path: Path, rows: List[Tuple[str, float, float]]) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Zusammenfassung"
+    ws.append(["Kategorie", "Tage", "Stunden"])
+    for category, days, hours in rows:
+        ws.append([category, float(f"{days:.2f}"), float(f"{hours:.2f}")])
+    wb.save(path)
+
+
+def export_sessions(
+    db: Session,
+    state: RuntimeState,
+    export_type: str,
+    export_format: str,
+    start_date: dt.date,
+    end_date: dt.date,
+) -> ExportRecord:
+    if export_type not in {"timesheet", "leave", "full"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported export type")
     if export_format not in {"pdf", "xlsx"}:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported export format")
 
+    summary_rows: List[Tuple[str, float, float]] = []
     if export_type == "timesheet":
         start, _ = _day_bounds(start_date)
         _, end = _day_bounds(end_date)
@@ -1084,29 +1386,38 @@ def export_sessions(db: Session, export_type: str, export_format: str, start_dat
             .order_by(WorkSession.start_time.asc())
             .all()
         )
-    else:  # leave export
+    elif export_type == "leave":
         leaves = list_leaves(db, start_date, end_date, None)
         sessions = []
         for leave in leaves:
             session = WorkSession(
-                start_time=dt.datetime.combine(leave.start_date, dt.time.min),
-                stop_time=dt.datetime.combine(leave.end_date, dt.time.max),
-                total_seconds=((leave.end_date - leave.start_date).days + 1) * 8 * 3600,
-                project=leave.type,
-                comment=leave.comment,
+                start_time=dt.datetime.combine(leave["start_date"], dt.time.min),
+                stop_time=dt.datetime.combine(leave["end_date"], dt.time.max),
+                total_seconds=((leave["end_date"] - leave["start_date"]).days + 1) * 8 * 3600,
+                project=leave["type"],
+                comment=leave.get("comment"),
                 status="stopped",
                 tags=["leave"],
             )
             sessions.append(session)
+    else:
+        summary_rows = _collect_full_export_data(db, state, start_date, end_date)
+        sessions = []
 
     file_suffix = "pdf" if export_format == "pdf" else "xlsx"
     filename = f"export_{export_type}_{start_date}_{end_date}_{int(_now().timestamp())}.{file_suffix}"
     path = settings.export_dir / filename
 
     if export_format == "pdf":
-        _write_pdf(path, f"TimeTrack Export - {export_type}", sessions)
+        if export_type == "full":
+            _write_full_pdf(path, f"TimeTrack Vollexport {start_date} – {end_date}", summary_rows)
+        else:
+            _write_pdf(path, f"TimeTrack Export - {export_type}", sessions)
     else:
-        _write_xlsx(path, sessions)
+        if export_type == "full":
+            _write_full_xlsx(path, summary_rows)
+        else:
+            _write_xlsx(path, sessions)
 
     checksum = _checksum_file(path)
     export = ExportRecord(

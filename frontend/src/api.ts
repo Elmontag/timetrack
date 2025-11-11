@@ -21,6 +21,14 @@ export interface DaySummary {
   work_seconds: number
   pause_seconds: number
   overtime_seconds: number
+  expected_seconds: number
+  vacation_seconds: number
+  sick_seconds: number
+  is_weekend: boolean
+  is_holiday: boolean
+  holiday_name: string | null
+  leave_types: string[]
+  baseline_expected_seconds?: number | null
 }
 
 export interface LeaveEntry {
@@ -30,6 +38,7 @@ export interface LeaveEntry {
   type: string
   comment: string | null
   approved: boolean
+  day_count: number
 }
 
 export interface ExportRecord {
@@ -66,11 +75,30 @@ export interface SettingsResponse {
   caldav_password_set: boolean
   expected_daily_hours: number | null
   expected_weekly_hours: number | null
+  vacation_days_per_year: number
+  vacation_days_carryover: number
 }
 
 export interface CalDavCalendar {
   id: string
   name: string
+}
+
+export interface HolidayEntry {
+  id: number
+  day: string
+  name: string
+  source: string
+}
+
+export interface ActionTokenCreated {
+  id: number
+  scope: string
+  expires_at: string | null
+  single_use: boolean
+  remaining_uses: number | null
+  created_at: string
+  token: string
 }
 
 export interface Subtrack {
@@ -164,6 +192,25 @@ export async function createExport(payload: { type: string; format: 'pdf' | 'xls
   return response.data
 }
 
+export async function listHolidays(params: { from_date?: string; to_date?: string } = {}) {
+  const response = await client.get<HolidayEntry[]>('/holidays', { params })
+  return response.data
+}
+
+export async function createHoliday(payload: { day: string; name: string }) {
+  const response = await client.post<HolidayEntry>('/holidays', payload)
+  return response.data
+}
+
+export async function deleteHoliday(holidayId: number) {
+  await client.delete(`/holidays/${holidayId}`)
+}
+
+export async function importHolidaysFromIcs(content: string) {
+  const response = await client.post<HolidayEntry[]>('/holidays/import', { content })
+  return response.data
+}
+
 export async function listCalendarEvents(params: { from_date?: string; to_date?: string }) {
   const response = await client.get<CalendarEvent[]>('/calendar/events', { params })
   return response.data
@@ -214,6 +261,17 @@ export async function updateSettings(
   payload: Partial<SettingsResponse> & { caldav_password?: string | null }
 ) {
   const response = await client.put<SettingsResponse>('/settings', payload)
+  return response.data
+}
+
+export async function createActionToken(payload: {
+  scope: string
+  ttl_minutes?: number
+  single_use?: boolean
+  max_uses?: number | null
+  ip_bind?: string | null
+}) {
+  const response = await client.post<ActionTokenCreated>('/tokens', payload)
   return response.data
 }
 
