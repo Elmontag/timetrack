@@ -211,6 +211,12 @@ def test_subtrack_creation(client: TestClient):
     items = list_resp.json()
     assert any(item["title"] == "Kundentermin" for item in items)
 
+    sessions_resp = client.get("/work/day/2024-04-01")
+    assert sessions_resp.status_code == 200
+    sessions = sessions_resp.json()
+    assert len(sessions) == 1
+    assert sessions[0]["comment"].startswith("Automatisch aus Termin:")
+
 
 def test_calendar_event_participation(client: TestClient):
     create_resp = client.post(
@@ -234,6 +240,14 @@ def test_calendar_event_participation(client: TestClient):
     assert list_resp.status_code == 200
     events = list_resp.json()
     assert any(event["id"] == event_id and event["participated"] for event in events)
+
+    subtracks = client.get("/work/subtracks/2024-03-01").json()
+    assert len(subtracks) == 1
+    assert subtracks[0]["title"] == "Projektmeeting"
+
+    sessions = client.get("/work/day/2024-03-01").json()
+    assert len(sessions) == 1
+    assert sessions[0]["comment"].startswith("Automatisch aus Termin:")
 
 
 def test_calendar_events_trigger_caldav_sync(monkeypatch, client: TestClient):

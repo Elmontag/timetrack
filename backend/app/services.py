@@ -12,7 +12,7 @@ from openpyxl import Workbook
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.pdfgen import canvas
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -35,6 +35,9 @@ else:  # pragma: no cover - only set when caldav is available
 
 UTC = dt.timezone.utc
 LOCAL_TZ = ZoneInfo(settings.timezone)
+
+
+AUTO_SESSION_COMMENT_PREFIX = "Automatisch aus Termin: "
 
 
 def _now() -> dt.datetime:
@@ -97,6 +100,61 @@ def _calendar_matches_selection(selection: Iterable[str], *candidates: Optional[
     return False
 
 
+def _fetch_caldav_occurrences(
+    calendar: Any,
+    range_start: dt.datetime,
+    range_end: dt.datetime,
+) -> Iterable[Any]:
+    def _strip_timezone(value: dt.datetime) -> dt.datetime:
+        if value.tzinfo is None:
+            return value
+        return value.replace(tzinfo=None)
+
+    attempts: List[Tuple[dt.datetime, dt.datetime, Optional[bool]]] = [
+        (range_start, range_end, True),
+        (range_start, range_end, False),
+    ]
+
+    naive_start = _strip_timezone(range_start)
+    naive_end = _strip_timezone(range_end)
+    if naive_start is not range_start or naive_end is not range_end:
+        attempts.extend(
+            [
+                (naive_start, naive_end, True),
+                (naive_start, naive_end, False),
+            ]
+        )
+
+    last_error: Optional[Exception] = None
+    date_search = getattr(calendar, "date_search", None)
+    if callable(date_search):
+        for start, end, expand in attempts:
+            try:
+                if expand is None:
+                    occurrences = date_search(start, end)
+                else:
+                    occurrences = date_search(start, end, expand=expand)
+            except Exception as exc:  # pragma: no cover - dependent on remote server
+                last_error = exc
+                continue
+            if occurrences is not None:
+                return occurrences
+
+    events_method = getattr(calendar, "events", None)
+    if callable(events_method):
+        try:
+            occurrences = events_method()
+        except Exception as exc:  # pragma: no cover - dependent on remote server
+            last_error = exc
+        else:
+            if occurrences is not None:
+                return occurrences
+
+    if last_error is not None:
+        raise last_error
+    return []
+
+
 def _coerce_ical_datetime(value: Any) -> Optional[dt.datetime]:
     if value is None:
         return None
@@ -156,7 +214,8 @@ def sync_caldav_events(
 ) -> None:
     client = _build_caldav_client(state)
     selected = state.caldav_selected_calendars
-    if client is None or not selected:
+    normalized_selected = {value for value in normalize_calendar_selection(selected)}
+    if client is None or not normalized_selected:
         return
 
     start_day = start_date or dt.date.today()
@@ -173,13 +232,44 @@ def sync_caldav_events(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="CalDAV-Anmeldung fehlgeschlagen") from exc
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="CalDAV-Synchronisation fehlgeschlagen") from exc
 
-    existing = {
-        (event.title, event.start_time, event.end_time): event
-        for event in db.query(CalendarEvent)
-        .filter(CalendarEvent.start_time >= range_start, CalendarEvent.start_time <= range_end)
-        .all()
-    }
+    existing_by_uid: Dict[Tuple[Optional[str], Optional[str], Optional[str]], CalendarEvent] = {}
+    existing_without_uid: Dict[Tuple[Optional[str], dt.datetime, dt.datetime, str], CalendarEvent] = {}
+    duplicates: List[CalendarEvent] = []
+
+    existing_query = db.query(CalendarEvent).filter(
+        or_(
+            CalendarEvent.calendar_identifier.is_(None),
+            CalendarEvent.calendar_identifier.in_(normalized_selected),
+        )
+    )
+
+    for stored in existing_query.all():
+        if stored.external_id:
+            key = (
+                stored.calendar_identifier,
+                stored.external_id,
+                stored.recurrence_id or "",
+            )
+            if key in existing_by_uid:
+                duplicates.append(stored)
+                continue
+            existing_by_uid[key] = stored
+        else:
+            key = (
+                stored.calendar_identifier,
+                _ensure_utc(stored.start_time),
+                _ensure_utc(stored.end_time),
+                stored.title,
+            )
+            if key in existing_without_uid:
+                duplicates.append(stored)
+                continue
+            existing_without_uid[key] = stored
+
     updated = False
+    for duplicate in duplicates:
+        db.delete(duplicate)
+        updated = True
 
     for calendar in calendars:
         calendar_id_raw = getattr(calendar, "url", None)
@@ -188,24 +278,26 @@ def sync_caldav_events(
         calendar_name = normalize_calendar_identifier(calendar_name_raw)
         if not _calendar_matches_selection(selected, calendar_id, calendar_name):
             continue
+        if calendar_id and calendar_id in normalized_selected:
+            event_calendar_identifier = calendar_id
+        elif calendar_name and calendar_name in normalized_selected:
+            event_calendar_identifier = calendar_name
+        else:
+            event_calendar_identifier = calendar_id or calendar_name or "caldav"
         try:
-            occurrences = calendar.date_search(range_start, range_end, expand=True)
-        except Exception:  # pragma: no cover - ignore calendar specific issues
-            continue
+            occurrences = _fetch_caldav_occurrences(calendar, range_start, range_end)
+        except Exception as exc:  # pragma: no cover - propagate as HTTP error
+            identifier = calendar_name or calendar_id or "unbekannt"
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"CalDAV-Kalender '{identifier}' konnte nicht synchronisiert werden",
+            ) from exc
         for occurrence in occurrences:
             component = getattr(occurrence, "icalendar_component", None)
-            vevent = None
-            if component is not None:
-                if hasattr(component, "subcomponents"):
-                    for sub in component.subcomponents:  # type: ignore[attr-defined]
-                        if getattr(sub, "name", "").upper() == "VEVENT":
-                            vevent = sub
-                            break
-                if vevent is None and hasattr(component, "vevent"):
-                    vevent = component.vevent
+            vevent = _extract_vevent(component)
             if vevent is None:
                 continue
-            summary = vevent.get("summary")
+            summary = _ical_to_string(vevent.get("summary")) or "Unbenannter Termin"
             dtstart = _coerce_ical_datetime(vevent.get("dtstart"))
             dtend = _coerce_ical_datetime(vevent.get("dtend"))
             if dtstart is None:
@@ -214,23 +306,185 @@ def sync_caldav_events(
             if dtend is None:
                 dtend = dtstart + dt.timedelta(hours=1)
             end_utc = _ensure_utc(dtend)
-            key = (str(summary or ""), start_utc, end_utc)
-            if key in existing:
+            if start_utc < range_start or start_utc > range_end:
                 continue
+            location = _ical_to_string(vevent.get("location"))
+            description = _ical_to_string(vevent.get("description"))
+            external_id = _ical_to_string(vevent.get("uid"))
+            recurrence_id = _ical_to_string(vevent.get("recurrence_id"))
+            attendees = _extract_attendees(vevent)
+
+            existing_event: Optional[CalendarEvent] = None
+            if external_id:
+                existing_event = existing_by_uid.get(
+                    (event_calendar_identifier, external_id, recurrence_id or "")
+                )
+
+            fallback_key = (
+                event_calendar_identifier,
+                start_utc,
+                end_utc,
+                summary,
+            )
+            if existing_event is None:
+                existing_event = existing_without_uid.get(fallback_key)
+
+            if existing_event is not None:
+                old_fallback_key: Optional[
+                    Tuple[Optional[str], dt.datetime, dt.datetime, str]
+                ] = None
+                if existing_event.external_id is None:
+                    old_fallback_key = (
+                        existing_event.calendar_identifier,
+                        _ensure_utc(existing_event.start_time),
+                        _ensure_utc(existing_event.end_time),
+                        existing_event.title,
+                    )
+
+                changed = False
+                if existing_event.title != summary:
+                    existing_event.title = summary
+                    changed = True
+                if _ensure_utc(existing_event.start_time) != start_utc:
+                    existing_event.start_time = start_utc
+                    changed = True
+                if _ensure_utc(existing_event.end_time) != end_utc:
+                    existing_event.end_time = end_utc
+                    changed = True
+                if existing_event.location != location:
+                    existing_event.location = location
+                    changed = True
+                if existing_event.description != description:
+                    existing_event.description = description
+                    changed = True
+                if existing_event.calendar_identifier != event_calendar_identifier:
+                    existing_event.calendar_identifier = event_calendar_identifier
+                    changed = True
+                if existing_event.external_id != external_id:
+                    existing_event.external_id = external_id
+                    changed = True
+                if existing_event.recurrence_id != recurrence_id:
+                    existing_event.recurrence_id = recurrence_id
+                    changed = True
+                if existing_event.attendees != attendees:
+                    existing_event.attendees = attendees
+                    changed = True
+
+                if existing_event.external_id:
+                    key = (
+                        existing_event.calendar_identifier,
+                        existing_event.external_id,
+                        existing_event.recurrence_id or "",
+                    )
+                    existing_by_uid[key] = existing_event
+                else:
+                    if old_fallback_key and old_fallback_key != fallback_key:
+                        existing_without_uid.pop(old_fallback_key, None)
+                    existing_without_uid[fallback_key] = existing_event
+
+                if changed:
+                    updated = True
+                continue
+
             event = CalendarEvent(
-                title=str(summary or "Unbenannter Termin"),
+                title=summary,
                 start_time=start_utc,
                 end_time=end_utc,
-                location=vevent.get("location"),
-                description=vevent.get("description"),
+                location=location,
+                description=description,
                 participated=False,
+                calendar_identifier=event_calendar_identifier,
+                external_id=external_id,
+                recurrence_id=recurrence_id,
+                attendees=attendees,
             )
             db.add(event)
-            existing[key] = event
+            if external_id:
+                key = (event_calendar_identifier, external_id, recurrence_id or "")
+                existing_by_uid[key] = event
+            else:
+                existing_without_uid[fallback_key] = event
             updated = True
 
     if updated:
         db.commit()
+
+
+def _extract_vevent(component: Any) -> Optional[Any]:
+    """Return the VEVENT component from a CalDAV occurrence."""
+
+    if component is None:
+        return None
+
+    candidates: List[Any] = [component]
+
+    direct = getattr(component, "vevent", None)
+    if direct is not None:
+        candidates.append(direct)
+
+    subcomponents = getattr(component, "subcomponents", None)
+    if subcomponents:
+        candidates.extend(subcomponents)
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+
+        name = getattr(candidate, "name", None)
+        if isinstance(name, str) and name.upper() == "VEVENT":
+            return candidate
+
+        get = getattr(candidate, "get", None)
+        if callable(get):
+            try:
+                if get("dtstart") is not None or get("summary") is not None:
+                    return candidate
+            except Exception:  # pragma: no cover - defensive guard
+                continue
+
+    return None
+
+
+def _ical_to_string(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    to_ical = getattr(value, "to_ical", None)
+    if callable(to_ical):
+        try:
+            rendered = to_ical()
+        except Exception:  # pragma: no cover - defensive conversion
+            rendered = None
+        else:
+            if isinstance(rendered, bytes):
+                return rendered.decode("utf-8", errors="ignore")
+            return str(rendered)
+    if isinstance(value, bytes):
+        return value.decode("utf-8", errors="ignore")
+    return str(value)
+
+
+def _extract_attendees(vevent: Any) -> List[str]:
+    attendees_raw = vevent.get("attendee")
+    if not attendees_raw:
+        return []
+    if not isinstance(attendees_raw, list):
+        attendees_raw = [attendees_raw]
+    attendees: List[str] = []
+    for entry in attendees_raw:
+        name: Optional[str] = None
+        params = getattr(entry, "params", None)
+        if params:
+            cn_value = params.get("CN")
+            if isinstance(cn_value, list):
+                cn_value = cn_value[0] if cn_value else None
+            if cn_value is not None:
+                name = _ical_to_string(cn_value)
+        if not name:
+            name = _ical_to_string(entry)
+        if name:
+            attendees.append(name)
+    return attendees
+
 
 def _expected_daily_seconds(state: RuntimeState) -> int:
     if state.expected_daily_hours is not None:
@@ -343,6 +597,71 @@ def create_manual_session(
     db.refresh(session)
     update_day_summary(db, start_time_utc.astimezone(LOCAL_TZ).date(), state)
     return session
+
+
+def _auto_session_comment(title: str, note: Optional[str] = None) -> str:
+    base = f"{AUTO_SESSION_COMMENT_PREFIX}{title}"
+    if note:
+        return f"{base} – {note}"
+    return base
+
+
+def _ensure_session_for_span(
+    db: Session,
+    state: RuntimeState,
+    start_time: Optional[dt.datetime],
+    end_time: Optional[dt.datetime],
+    title: str,
+    project: Optional[str],
+    tags: List[str],
+    note: Optional[str],
+) -> Optional[WorkSession]:
+    if start_time is None or end_time is None:
+        return None
+    start_utc = _ensure_utc(start_time)
+    end_utc = _ensure_utc(end_time)
+    existing = (
+        db.query(WorkSession)
+        .filter(
+            WorkSession.start_time == start_utc,
+            WorkSession.stop_time == end_utc,
+        )
+        .one_or_none()
+    )
+    desired_comment = _auto_session_comment(title, note)
+    if existing:
+        if (existing.comment or "").startswith(AUTO_SESSION_COMMENT_PREFIX) and existing.comment != desired_comment:
+            existing.comment = desired_comment
+            db.add(existing)
+        return existing
+    return create_manual_session(
+        db,
+        state,
+        start_utc,
+        end_utc,
+        project,
+        tags or [],
+        desired_comment,
+    )
+
+
+def _ensure_session_for_subtrack(
+    db: Session,
+    state: RuntimeState,
+    subtrack: WorkSubtrack,
+    source_title: Optional[str] = None,
+) -> Optional[WorkSession]:
+    title = source_title or subtrack.title
+    return _ensure_session_for_span(
+        db,
+        state,
+        subtrack.start_time,
+        subtrack.end_time,
+        title,
+        subtrack.project,
+        list(subtrack.tags or []),
+        subtrack.note,
+    )
 
 
 def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
@@ -515,6 +834,7 @@ def create_subtrack(
     db.add(subtrack)
     db.commit()
     db.refresh(subtrack)
+    _ensure_session_for_subtrack(db, state, subtrack)
     update_day_summary(db, day, state)
     return subtrack
 
@@ -563,6 +883,7 @@ def create_calendar_event(
     location: Optional[str],
     description: Optional[str],
     participated: bool,
+    attendees: Optional[List[str]] = None,
 ) -> CalendarEvent:
     start_time_utc = _ensure_utc(start_time)
     end_time_utc = _ensure_utc(end_time)
@@ -575,6 +896,8 @@ def create_calendar_event(
         location=location,
         description=description,
         participated=participated,
+        attendees=list(attendees or []),
+        calendar_identifier="manual",
     )
     db.add(event)
     db.commit()
@@ -599,11 +922,61 @@ def list_calendar_events(
     return query.order_by(CalendarEvent.start_time.asc()).all()
 
 
-def set_calendar_participation(db: Session, event_id: int, participated: bool) -> CalendarEvent:
+def set_calendar_participation(
+    db: Session, state: RuntimeState, event_id: int, participated: bool
+) -> CalendarEvent:
     event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).one_or_none()
     if not event:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Calendar event not found")
+    if event.participated == participated:
+        if participated and event.subtrack is not None:
+            _ensure_session_for_subtrack(db, state, event.subtrack, event.title)
+        return event
+
     event.participated = participated
+    if participated:
+        start_local = _ensure_utc(event.start_time).astimezone(LOCAL_TZ)
+        subtrack = event.subtrack
+        if subtrack is None:
+            subtrack = WorkSubtrack(
+                day=start_local.date(),
+                title=event.title,
+                start_time=event.start_time,
+                end_time=event.end_time,
+                project=None,
+                tags=[],
+                note=event.description,
+                calendar_event=event,
+            )
+            db.add(subtrack)
+        else:
+            subtrack.day = start_local.date()
+            subtrack.title = event.title
+            subtrack.start_time = event.start_time
+            subtrack.end_time = event.end_time
+            subtrack.note = event.description
+        _ensure_session_for_subtrack(db, state, subtrack, event.title)
+    else:
+        subtrack = event.subtrack
+        if subtrack is not None:
+            day = subtrack.day
+            auto_comment = _auto_session_comment(event.title, subtrack.note)
+            session = (
+                db.query(WorkSession)
+                .filter(
+                    WorkSession.start_time == event.start_time,
+                    WorkSession.stop_time == event.end_time,
+                    WorkSession.comment == auto_comment,
+                )
+                .one_or_none()
+            )
+            db.delete(subtrack)
+            if session is not None:
+                db.delete(session)
+                if day:
+                    update_day_summary(db, day, state)
+        # No linked subtrack means no additional cleanup necessary
+
     db.add(event)
     db.commit()
     db.refresh(event)
