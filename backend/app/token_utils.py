@@ -62,12 +62,15 @@ def verify_token(db: Session, token_value: str) -> Optional[ActionToken]:
     now = _now()
     if token.expires_at and token.expires_at < now:
         _record_event(db, token, "expired", "Token expired")
+        db.commit()
         return None
     if token.single_use and token.last_used_at is not None:
         _record_event(db, token, "reused", "Single use token already consumed")
+        db.commit()
         return None
     if token.remaining_uses is not None and token.remaining_uses <= 0:
         _record_event(db, token, "exhausted", "Token uses exhausted")
+        db.commit()
         return None
     return token
 

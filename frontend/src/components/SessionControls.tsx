@@ -1,6 +1,7 @@
-import { useMemo, useState } from 'react'
 import { PlayIcon, PauseIcon, StopIcon } from '@heroicons/react/24/outline'
 import clsx from 'clsx'
+import dayjs from 'dayjs'
+import { useEffect, useMemo, useState } from 'react'
 import { pauseSession, startSession, stopSession, WorkSession } from '../api'
 import { useAsync } from '../hooks/useAsync'
 
@@ -16,9 +17,20 @@ export function SessionControls({ activeSession, onUpdate }: Props) {
   const { run: runStart, loading: startLoading } = useAsync(startSession)
   const { run: runPause, loading: pauseLoading } = useAsync(pauseSession)
   const { run: runStop, loading: stopLoading } = useAsync(stopSession)
+  const [tick, setTick] = useState(() => Date.now())
 
   const isPaused = activeSession?.status === 'paused'
   const isActive = activeSession && ['active', 'paused'].includes(activeSession.status)
+
+  useEffect(() => {
+    if (!activeSession || activeSession.status === 'stopped') {
+      return
+    }
+    const interval = window.setInterval(() => {
+      setTick(Date.now())
+    }, 1000)
+    return () => window.clearInterval(interval)
+  }, [activeSession])
 
   const handleStart = async () => {
     const session = await runStart({ comment })
@@ -38,6 +50,25 @@ export function SessionControls({ activeSession, onUpdate }: Props) {
   }
 
   const startLabel = useMemo(() => (isActive ? 'Laufende Sitzung' : 'Arbeitszeit starten'), [isActive])
+
+  const runtimeLabel = useMemo(() => {
+    if (!activeSession || activeSession.status === 'stopped') {
+      return null
+    }
+    const now = dayjs(tick)
+    const start = dayjs(activeSession.start_time)
+    let pauseSeconds = activeSession.paused_duration || 0
+    if (activeSession.status === 'paused' && activeSession.last_pause_start) {
+      pauseSeconds += now.diff(dayjs(activeSession.last_pause_start), 'second')
+    }
+    const elapsed = Math.max(0, now.diff(start, 'second') - pauseSeconds)
+    const hours = Math.floor(elapsed / 3600)
+    const minutes = Math.floor((elapsed % 3600) / 60)
+    const seconds = elapsed % 60
+    return `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${seconds
+      .toString()
+      .padStart(2, '0')}`
+  }, [activeSession, tick])
 
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 shadow-lg shadow-slate-900/50">
@@ -86,6 +117,11 @@ export function SessionControls({ activeSession, onUpdate }: Props) {
         <p className="mt-3 text-sm text-slate-400">
           Laufend seit <span className="font-medium text-slate-100">{new Date(activeSession.start_time).toLocaleString()}</span>
           {activeSession.comment && <span className="text-slate-500"> – {activeSession.comment}</span>}
+          {runtimeLabel && (
+            <span className="ml-2 inline-flex items-center rounded-full bg-slate-800 px-2 py-0.5 font-mono text-xs text-primary">
+              {runtimeLabel}
+            </span>
+          )}
         </p>
       )}
     </div>

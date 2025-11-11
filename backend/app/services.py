@@ -13,7 +13,8 @@ from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .models import DaySummary, ExportRecord, LeaveEntry, WorkSession
+from .models import CalendarEvent, DaySummary, ExportRecord, LeaveEntry, WorkSession
+from .state import RuntimeState
 
 
 def _now() -> dt.datetime:
@@ -75,6 +76,35 @@ def stop_session(db: Session, comment: Optional[str] = None) -> WorkSession:
     db.commit()
     db.refresh(session)
     update_day_summary(db, session.start_time.date())
+    return session
+
+
+def create_manual_session(
+    db: Session,
+    start_time: dt.datetime,
+    end_time: dt.datetime,
+    project: Optional[str],
+    tags: List[str],
+    comment: Optional[str],
+) -> WorkSession:
+    if end_time <= start_time:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="End time must be after start time")
+    duration = end_time - start_time
+    total_seconds = int(duration.total_seconds())
+    session = WorkSession(
+        start_time=start_time,
+        stop_time=end_time,
+        status="stopped",
+        project=project,
+        tags=tags,
+        comment=comment,
+        paused_duration=0,
+        total_seconds=total_seconds,
+    )
+    db.add(session)
+    db.commit()
+    db.refresh(session)
+    update_day_summary(db, start_time.date())
     return session
 
 
@@ -160,6 +190,65 @@ def list_leaves(db: Session, start_date: Optional[dt.date], end_date: Optional[d
     if leave_type:
         query = query.filter(LeaveEntry.type == leave_type)
     return query.order_by(LeaveEntry.start_date.asc()).all()
+
+
+def create_calendar_event(
+    db: Session,
+    title: str,
+    start_time: dt.datetime,
+    end_time: dt.datetime,
+    location: Optional[str],
+    description: Optional[str],
+    participated: bool,
+) -> CalendarEvent:
+    if end_time <= start_time:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event end must be after start")
+    event = CalendarEvent(
+        title=title,
+        start_time=start_time,
+        end_time=end_time,
+        location=location,
+        description=description,
+        participated=participated,
+    )
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def list_calendar_events(
+    db: Session,
+    start_date: Optional[dt.date],
+    end_date: Optional[dt.date],
+) -> List[CalendarEvent]:
+    query = db.query(CalendarEvent)
+    if start_date:
+        query = query.filter(CalendarEvent.start_time >= dt.datetime.combine(start_date, dt.time.min))
+    if end_date:
+        query = query.filter(CalendarEvent.start_time <= dt.datetime.combine(end_date, dt.time.max))
+    return query.order_by(CalendarEvent.start_time.asc()).all()
+
+
+def set_calendar_participation(db: Session, event_id: int, participated: bool) -> CalendarEvent:
+    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).one_or_none()
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Calendar event not found")
+    event.participated = participated
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return event
+
+
+def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> dict:
+    normalized = dict(updates)
+    if "allow_ips" in normalized and normalized["allow_ips"] is not None:
+        if isinstance(normalized["allow_ips"], str):
+            normalized["allow_ips"] = [ip.strip() for ip in normalized["allow_ips"].split(",") if ip.strip()]
+    state.apply(normalized)
+    state.persist(db, {k: normalized[k] for k in normalized if k in {"allow_ips", "caldav_url", "caldav_user", "caldav_password", "caldav_default_cal"}})
+    return state.snapshot()
 
 
 def _write_pdf(path: Path, title: str, sessions: Iterable[WorkSession]) -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import List, Optional
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class WorkSessionBase(BaseModel):
@@ -17,6 +17,7 @@ class WorkSessionBase(BaseModel):
     comment: Optional[str]
     paused_duration: int
     total_seconds: Optional[int]
+    last_pause_start: Optional[dt.datetime]
 
 
 
@@ -31,6 +32,14 @@ class WorkPauseRequest(BaseModel):
 
 
 class WorkStopRequest(BaseModel):
+    comment: Optional[str] = None
+
+
+class WorkSessionManualRequest(BaseModel):
+    start_time: dt.datetime
+    end_time: dt.datetime
+    project: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
     comment: Optional[str] = None
 
 
@@ -113,3 +122,48 @@ class ActionTokenResult(BaseModel):
     action: str
     session: Optional[WorkSessionBase]
     message: str
+
+
+class CalendarEventResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    title: str
+    start_time: dt.datetime
+    end_time: dt.datetime
+    location: Optional[str]
+    description: Optional[str]
+    participated: bool
+
+
+class CalendarEventCreateRequest(BaseModel):
+    title: str
+    start_time: dt.datetime
+    end_time: dt.datetime
+    location: Optional[str] = None
+    description: Optional[str] = None
+    participated: bool = False
+
+
+class CalendarEventUpdateRequest(BaseModel):
+    participated: bool
+
+
+class SettingsResponse(BaseModel):
+    environment: str
+    timezone: str
+    locale: str
+    storage: str
+    allow_ips: List[str]
+    caldav_url: Optional[str]
+    caldav_user: Optional[str]
+    caldav_default_cal: Optional[str]
+    caldav_password_set: bool
+
+
+class SettingsUpdateRequest(BaseModel):
+    allow_ips: Optional[List[str]] = None
+    caldav_url: Optional[str] = None
+    caldav_user: Optional[str] = None
+    caldav_password: Optional[str] = None
+    caldav_default_cal: Optional[str] = None

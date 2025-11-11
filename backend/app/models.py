@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from sqlalchemy import Column, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.sqlite import JSON as SQLiteJSON
 from sqlalchemy.orm import declarative_base, relationship
 
@@ -116,3 +116,24 @@ class TokenEvent(Base):
     detail = Column(Text, nullable=True)
 
     token = relationship("ActionToken", back_populates="events")
+
+
+class CalendarEvent(Base):
+    __tablename__ = "calendar_events"
+
+    id = Column(Integer, primary_key=True)
+    title = Column(String(200), nullable=False)
+    start_time = Column(DateTime(), nullable=False)
+    end_time = Column(DateTime(), nullable=False)
+    location = Column(String(200), nullable=True)
+    description = Column(Text, nullable=True)
+    participated = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime(), default=dt.datetime.utcnow, nullable=False)
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key = Column(String(100), primary_key=True)
+    value = Column(Text, nullable=False)
+    updated_at = Column(DateTime(), default=dt.datetime.utcnow, onupdate=dt.datetime.utcnow)

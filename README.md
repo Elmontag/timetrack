@@ -23,11 +23,14 @@ TimeTrack ist eine selbstgehostete Stempeluhr mit React-Frontend und FastAPI-Bac
 
 ## Features im MVP
 
-- ⏱️ **Arbeitszeit starten/pausieren/stoppen** – direkt in der UI oder per Token-Link (`/a/<token>`)
-- 📅 **Kalender- und Tagesübersichten** – Tagesprotokoll & Monatskennzahlen (Arbeitszeit, Pausen, Überstunden)
+- ⏱️ **Arbeitszeit starten/pausieren/stoppen** – direkt in der UI oder per Token-Link (`/a/<token>`) inkl. Live-Laufzeitanzeige
+- 📝 **Nachträgliche Erfassung** – Meetings & vergessene Blöcke per Formular nachtragen
+- 📅 **Kalender- und Tagesübersichten** – Tages-, Monats- und Jahresansicht mit Stundenanalyse
 - 🌴 **Urlaub & Arbeitsunfähigkeit** – Erfassung inkl. Kommentar & Genehmigungsstatus
+- 📆 **Kalenderabgleich** – Termine im internen Kalender als „Teilgenommen“/„Nicht teilgenommen“ markieren
 - 📤 **Exporte** – Stundenzettel oder Abwesenheiten als PDF oder XLSX, Ablage im Export-Verzeichnis
 - 🔐 **Sicherheit** – IP-Allowlist, HMAC-Token mit TTL, optional IP-Bindung & Einmal-Token
+- ⚙️ **Einstellungsmenü** – IP-Allowlist und CalDAV-Zugangsdaten direkt in der UI pflegen
 - 🛠️ **API** – REST/JSON, OpenAPI-Schema (`/docs`) und Healthcheck (`/healthz`)
 
 ## Voraussetzungen
@@ -101,22 +104,25 @@ Die Backend-Tests verifizieren den kompletten Workflow (Start/Pause/Stop, Export
 | `/work/pause`         | POST    | Pause / Fortsetzen              |
 | `/work/stop`          | POST    | Arbeitszeit stoppen             |
 | `/work/day/{yyyy-mm-dd}` | GET  | Sitzungen eines Tages           |
+| `/work/manual`        | POST    | Arbeitszeit nachtragen          |
 | `/days?from&to`       | GET     | Tages-Summaries im Zeitraum     |
 | `/leaves`             | GET/POST| Urlaub/AU verwalten             |
+| `/calendar/events`    | GET/POST/PATCH | Kalendertermine & Teilnahme |
 | `/exports`            | POST    | Export (PDF/XLSX) erstellen     |
 | `/exports/{id}`       | GET     | Export herunterladen            |
 | `/tokens`             | POST    | Aktions-Token erzeugen          |
 | `/a/{token}`          | GET     | Token ausführen (Start/Pause/…) |
+| `/settings`           | GET/PUT | Laufende Einstellungen verwalten |
 
 ## Frontend-Einblicke
 
 Die React-App bietet einen klar strukturierten Flow:
 
-1. **Dashboard:** Session-Controls, Statusindikator, API-Endpunktanzeige
-2. **Tagesprotokoll:** Filterbares Log aller Sitzungen
-3. **Monatsübersicht:** Kennzahlen + tabellarische Ansicht
-4. **Abwesenheiten:** Formular + Liste für Urlaub/AU
-5. **Exporte:** Auswahl Zeitraum/Typ/Format mit direktem Download
+1. **Arbeitszeit:** Live-Steuerung, Nachtrag-Formular, Tagesprotokoll & Analyse (Tag/Monat/Jahr)
+2. **Abwesenheiten:** Formular + Liste für Urlaub/AU
+3. **Kalender:** Termine importieren/erfassen und Teilnahme markieren
+4. **Exporte:** Zeitraum/Typ/Format wählen mit direktem Download
+5. **Einstellungen:** IP-Allowlist & CalDAV-Zugang per UI pflegen
 
 Tailwind CSS sorgt für ein dunkles, kontrastreiches Theme, optimiert für Desktop & Tablet.
 

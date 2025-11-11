@@ -3,6 +3,9 @@ from __future__ import annotations
 import datetime as dt
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
+
+from app import models
 
 
 def test_start_pause_resume_stop_flow(client: TestClient):
@@ -100,3 +103,79 @@ def test_token_flow(client: TestClient):
     assert action_resp.status_code == 200
     result = action_resp.json()
     assert result["message"]
+
+
+def test_manual_session_entry(client: TestClient):
+    payload = {
+        "start_time": "2024-02-01T09:00:00",
+        "end_time": "2024-02-01T11:30:00",
+        "project": "Retro",
+        "comment": "Nachtrag",
+        "tags": ["review"],
+    }
+    response = client.post("/work/manual", json=payload)
+    assert response.status_code == 201
+    session = response.json()
+    assert session["status"] == "stopped"
+    assert session["total_seconds"] == 9000
+
+    day_resp = client.get("/work/day/2024-02-01")
+    assert day_resp.status_code == 200
+    entries = day_resp.json()
+    assert any(item["comment"] == "Nachtrag" for item in entries)
+
+
+def test_calendar_event_participation(client: TestClient):
+    create_resp = client.post(
+        "/calendar/events",
+        json={
+            "title": "Projektmeeting",
+            "start_time": "2024-03-01T10:00:00",
+            "end_time": "2024-03-01T11:00:00",
+            "location": "Raum A",
+            "description": "Kickoff",
+        },
+    )
+    assert create_resp.status_code == 201
+    event_id = create_resp.json()["id"]
+
+    patch_resp = client.patch(f"/calendar/events/{event_id}", json={"participated": True})
+    assert patch_resp.status_code == 200
+    assert patch_resp.json()["participated"] is True
+
+    list_resp = client.get("/calendar/events", params={"from_date": "2024-03-01", "to_date": "2024-03-31"})
+    assert list_resp.status_code == 200
+    events = list_resp.json()
+    assert any(event["id"] == event_id and event["participated"] for event in events)
+
+
+def test_settings_update(client: TestClient, session: Session):
+    update_payload = {
+        "allow_ips": ["127.0.0.1", "192.168.0.0/24"],
+        "caldav_url": "https://cal.example.com",
+        "caldav_user": "user",
+        "caldav_default_cal": "Work",
+    }
+    resp = client.put("/settings", json=update_payload)
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "192.168.0.0/24" in data["allow_ips"]
+    assert data["caldav_url"] == "https://cal.example.com"
+
+    stored = session.query(models.AppSetting).all()
+    assert any(item.key == "caldav_url" for item in stored)
+
+
+def test_token_reuse_records_event(client: TestClient, session: Session):
+    token_resp = client.post("/tokens", json={"scope": "start", "ttl_minutes": 10, "single_use": True})
+    assert token_resp.status_code == 201
+    token_value = token_resp.json()["token"]
+
+    first_use = client.get(f"/a/{token_value}")
+    assert first_use.status_code == 200
+
+    second_use = client.get(f"/a/{token_value}")
+    assert second_use.status_code == 404
+
+    events = session.query(models.TokenEvent).all()
+    assert any(event.outcome == "reused" for event in events)

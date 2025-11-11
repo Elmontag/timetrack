@@ -11,12 +11,15 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .config import settings
-from .database import engine, get_db
+from .database import db_session, engine, get_db
 from .middleware import AllowListMiddleware
 from .schemas import (
     ActionTokenCreateRequest,
     ActionTokenCreatedResponse,
     ActionTokenResult,
+    CalendarEventCreateRequest,
+    CalendarEventResponse,
+    CalendarEventUpdateRequest,
     DaySummaryResponse,
     ExportRequest,
     ExportResponse,
@@ -24,24 +27,41 @@ from .schemas import (
     LeaveEntryResponse,
     WorkSessionBase,
     WorkSessionCreateRequest,
+    WorkSessionManualRequest,
     WorkStopRequest,
     WorkToggleResponse,
+    SettingsResponse,
+    SettingsUpdateRequest,
 )
 from .services import (
+    create_calendar_event,
     create_leave,
+    create_manual_session,
     export_sessions,
+    list_calendar_events,
     list_leaves,
     list_sessions_for_day,
     pause_or_resume_session,
     range_day_summaries,
+    set_calendar_participation,
     start_session,
     stop_session,
+    update_runtime_settings,
 )
+from .state import RuntimeState
 from .token_utils import consume_token, create_token, verify_token
 
 models.Base.metadata.create_all(bind=engine)
 
+runtime_state = RuntimeState(settings)
+with db_session() as session:
+    try:
+        runtime_state.load_from_db(session)
+    except Exception:
+        pass
+
 app = FastAPI(title=settings.app_name)
+app.state.runtime_state = runtime_state
 app.add_middleware(AllowListMiddleware)
 app.add_middleware(
     CORSMiddleware,
@@ -76,6 +96,12 @@ def work_stop(payload: WorkStopRequest, db: Session = Depends(get_db)) -> WorkSe
     return session
 
 
+@app.post("/work/manual", response_model=WorkSessionBase, status_code=status.HTTP_201_CREATED)
+def work_manual(payload: WorkSessionManualRequest, db: Session = Depends(get_db)) -> WorkSessionBase:
+    session = create_manual_session(db, payload.start_time, payload.end_time, payload.project, payload.tags, payload.comment)
+    return session
+
+
 @app.get("/work/day/{day}", response_model=list[WorkSessionBase])
 def work_day(day: dt.date, db: Session = Depends(get_db)) -> list[WorkSessionBase]:
     return list_sessions_for_day(db, day)
@@ -97,6 +123,35 @@ def create_leave_entry(payload: LeaveCreateRequest, db: Session = Depends(get_db
 @app.get("/leaves", response_model=list[LeaveEntryResponse])
 def get_leaves(from_date: Optional[dt.date] = None, to_date: Optional[dt.date] = None, type: Optional[str] = None, db: Session = Depends(get_db)) -> list[LeaveEntryResponse]:
     return list_leaves(db, from_date, to_date, type)
+
+
+@app.get("/calendar/events", response_model=list[CalendarEventResponse])
+def get_calendar_events(
+    from_date: Optional[dt.date] = None,
+    to_date: Optional[dt.date] = None,
+    db: Session = Depends(get_db),
+) -> list[CalendarEventResponse]:
+    return list_calendar_events(db, from_date, to_date)
+
+
+@app.post("/calendar/events", response_model=CalendarEventResponse, status_code=status.HTTP_201_CREATED)
+def create_calendar_event_entry(payload: CalendarEventCreateRequest, db: Session = Depends(get_db)) -> CalendarEventResponse:
+    event = create_calendar_event(
+        db,
+        payload.title,
+        payload.start_time,
+        payload.end_time,
+        payload.location,
+        payload.description,
+        payload.participated,
+    )
+    return event
+
+
+@app.patch("/calendar/events/{event_id}", response_model=CalendarEventResponse)
+def update_calendar_event(event_id: int, payload: CalendarEventUpdateRequest, db: Session = Depends(get_db)) -> CalendarEventResponse:
+    event = set_calendar_participation(db, event_id, payload.participated)
+    return event
 
 
 @app.post("/exports", response_model=ExportResponse, status_code=status.HTTP_201_CREATED)
@@ -179,11 +234,36 @@ def execute_token(token_value: str, request: Request, db: Session = Depends(get_
     return ActionTokenResult(action=scope, session=session, message=message)
 
 
-@app.get("/settings")
-def read_settings() -> dict[str, str | int]:
-    return {
-        "environment": settings.environment,
-        "timezone": settings.timezone,
-        "locale": settings.locale,
-        "storage": settings.storage_backend,
-    }
+@app.get("/settings", response_model=SettingsResponse)
+def read_settings(request: Request) -> SettingsResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    snapshot = state.snapshot()
+    return SettingsResponse(
+        environment=settings.environment,
+        timezone=settings.timezone,
+        locale=settings.locale,
+        storage=settings.storage_backend,
+        allow_ips=snapshot["allow_ips"],
+        caldav_url=snapshot["caldav_url"] or None,
+        caldav_user=snapshot["caldav_user"] or None,
+        caldav_default_cal=snapshot["caldav_default_cal"] or None,
+        caldav_password_set=snapshot["caldav_password_set"],
+    )
+
+
+@app.put("/settings", response_model=SettingsResponse)
+def write_settings(payload: SettingsUpdateRequest, request: Request, db: Session = Depends(get_db)) -> SettingsResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    updates = payload.model_dump(exclude_unset=True)
+    snapshot = update_runtime_settings(db, state, updates)
+    return SettingsResponse(
+        environment=settings.environment,
+        timezone=settings.timezone,
+        locale=settings.locale,
+        storage=settings.storage_backend,
+        allow_ips=snapshot["allow_ips"],
+        caldav_url=snapshot["caldav_url"] or None,
+        caldav_user=snapshot["caldav_user"] or None,
+        caldav_default_cal=snapshot["caldav_default_cal"] or None,
+        caldav_password_set=snapshot["caldav_password_set"],
+    )

@@ -14,6 +14,7 @@ from app.config import settings
 from app.database import get_db
 from app.main import app
 from app import models
+from app.state import RuntimeState
 
 
 @pytest.fixture(scope="session")
@@ -47,6 +48,10 @@ def session(engine) -> Generator[Session, None, None]:
 
 @pytest.fixture(scope="function")
 def client(session: Session) -> Generator[TestClient, None, None]:
+    runtime_state = RuntimeState(settings)
+    runtime_state.load_from_db(session)
+    app.state.runtime_state = runtime_state
+
     def override_get_db():
         try:
             yield session
