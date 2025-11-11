@@ -77,12 +77,19 @@ def _build_caldav_client(state: RuntimeState, *, strict: bool = False):
         ) from exc
 
 
-def _calendar_matches_selection(selection: Iterable[str], *candidates: Optional[str]) -> bool:
-    normalized = {entry.strip().lower() for entry in selection if entry.strip()}
+def _calendar_matches_selection(selection: Iterable[str], *candidates: Optional[Any]) -> bool:
+    normalized: set[str] = set()
+    for entry in selection:
+        text = str(entry).strip().lower()
+        if text:
+            normalized.add(text)
     if not normalized:
         return False
     for candidate in candidates:
-        if candidate and candidate.strip().lower() in normalized:
+        if candidate is None:
+            continue
+        text = str(candidate).strip().lower()
+        if text and text in normalized:
             return True
     return False
 
@@ -174,8 +181,10 @@ def sync_caldav_events(
     updated = False
 
     for calendar in calendars:
-        calendar_id = getattr(calendar, "url", None)
-        calendar_name = getattr(calendar, "name", None)
+        calendar_id_raw = getattr(calendar, "url", None)
+        calendar_id = str(calendar_id_raw) if calendar_id_raw is not None else None
+        calendar_name_raw = getattr(calendar, "name", None)
+        calendar_name = str(calendar_name_raw) if calendar_name_raw is not None else None
         if not _calendar_matches_selection(selected, calendar_id, calendar_name):
             continue
         try:

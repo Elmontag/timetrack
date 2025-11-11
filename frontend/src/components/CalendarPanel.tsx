@@ -1,5 +1,5 @@
 import dayjs from 'dayjs'
-import { FormEvent, useEffect, useState } from 'react'
+import { FormEvent, useCallback, useEffect, useState } from 'react'
 import { CalendarEvent, createCalendarEvent, listCalendarEvents, updateCalendarParticipation } from '../api'
 
 interface Props {
@@ -12,6 +12,8 @@ export function CalendarPanel({ refreshKey }: Props) {
     from: dayjs().startOf('month').format('YYYY-MM-DD'),
     to: dayjs().endOf('month').format('YYYY-MM-DD'),
   })
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [form, setForm] = useState({
     title: '',
     start_time: dayjs().format('YYYY-MM-DDTHH:mm'),
@@ -21,13 +23,24 @@ export function CalendarPanel({ refreshKey }: Props) {
   })
   const [submitting, setSubmitting] = useState(false)
 
-  useEffect(() => {
-    const run = async () => {
+  const loadEvents = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
       const data = await listCalendarEvents({ from_date: range.from, to_date: range.to })
       setEvents(data)
+    } catch (err) {
+      console.error('Kalender konnte nicht geladen werden', err)
+      setEvents([])
+      setError('Kalenderdaten konnten nicht geladen werden.')
+    } finally {
+      setLoading(false)
     }
-    run()
-  }, [range, refreshKey])
+  }, [range.from, range.to])
+
+  useEffect(() => {
+    loadEvents()
+  }, [loadEvents, refreshKey])
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
@@ -40,8 +53,7 @@ export function CalendarPanel({ refreshKey }: Props) {
         location: form.location || undefined,
         description: form.description || undefined,
       })
-      const data = await listCalendarEvents({ from_date: range.from, to_date: range.to })
-      setEvents(data)
+      await loadEvents()
       setForm((prev) => ({ ...prev, title: '', description: '' }))
     } finally {
       setSubmitting(false)
@@ -50,8 +62,7 @@ export function CalendarPanel({ refreshKey }: Props) {
 
   const toggleParticipation = async (eventId: number, participated: boolean) => {
     await updateCalendarParticipation(eventId, participated)
-    const data = await listCalendarEvents({ from_date: range.from, to_date: range.to })
-    setEvents(data)
+    await loadEvents()
   }
 
   return (
@@ -149,7 +160,21 @@ export function CalendarPanel({ refreshKey }: Props) {
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800">
-            {events.map((event) => (
+            {loading && (
+              <tr>
+                <td colSpan={4} className="px-4 py-3 text-center text-sm text-slate-400">
+                  Lade Termine…
+                </td>
+              </tr>
+            )}
+            {error && !loading && (
+              <tr>
+                <td colSpan={4} className="px-4 py-3 text-center text-sm text-rose-300">
+                  {error}
+                </td>
+              </tr>
+            )}
+            {!loading && !error && events.map((event) => (
               <tr key={event.id} className="hover:bg-slate-900/70">
                 <td className="px-4 py-2 text-slate-100">
                   <div className="font-medium">{event.title}</div>
@@ -175,7 +200,7 @@ export function CalendarPanel({ refreshKey }: Props) {
                 </td>
               </tr>
             ))}
-            {events.length === 0 && (
+            {!loading && !error && events.length === 0 && (
               <tr>
                 <td colSpan={4} className="px-4 py-3 text-center text-sm text-slate-400">
                   Keine Termine im Zeitraum.

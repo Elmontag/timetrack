@@ -10,13 +10,19 @@ interface Props {
 export function TodayCalendarList({ day, refreshKey }: Props) {
   const [events, setEvents] = useState<CalendarEvent[]>([])
   const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
     const run = async () => {
       setLoading(true)
+      setError(null)
       try {
         const data = await listCalendarEvents({ from_date: day, to_date: day })
         setEvents(data)
+      } catch (err) {
+        console.error('Kalender konnte nicht geladen werden', err)
+        setEvents([])
+        setError('Kalenderdaten konnten nicht geladen werden.')
       } finally {
         setLoading(false)
       }
@@ -37,6 +43,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
       </div>
       <div className="mt-4 space-y-3">
         {loading && <p className="text-sm text-slate-400">Lade Termine…</p>}
+        {error && !loading && <p className="text-sm text-rose-300">{error}</p>}
         {!loading && events.length === 0 && (
           <p className="text-sm text-slate-500">Keine Termine für heute.</p>
         )}
