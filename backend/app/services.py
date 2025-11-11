@@ -24,10 +24,13 @@ try:  # pragma: no cover - optional dependency
     from caldav import DAVClient
     from caldav.elements import dav
     from caldav.lib import error as caldav_error
-except ImportError:  # pragma: no cover - caldav optional
+except ImportError as exc:  # pragma: no cover - caldav optional
     DAVClient = None  # type: ignore[assignment]
     dav = None  # type: ignore[assignment]
     caldav_error = None  # type: ignore[assignment]
+    _CALDAV_IMPORT_ERROR = exc
+else:  # pragma: no cover - only set when caldav is available
+    _CALDAV_IMPORT_ERROR = None
 
 
 UTC = dt.timezone.utc
@@ -52,6 +55,11 @@ def _day_bounds(day: dt.date) -> Tuple[dt.datetime, dt.datetime]:
 
 def _build_caldav_client(state: RuntimeState, *, strict: bool = False):
     if DAVClient is None:
+        if strict and _CALDAV_IMPORT_ERROR is not None:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"CalDAV-Bibliothek nicht verfügbar: {_CALDAV_IMPORT_ERROR}",
+            )
         if strict:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
