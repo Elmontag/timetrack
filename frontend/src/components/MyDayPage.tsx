@@ -3,7 +3,6 @@ import { WorkSession } from '../api'
 import { SessionControls } from './SessionControls'
 import { SubtrackManager } from './SubtrackManager'
 import { TodayCalendarList } from './TodayCalendarList'
-import { TodaySummary } from './TodaySummary'
 
 interface Props {
   activeSession: WorkSession | null
@@ -28,23 +27,20 @@ export function MyDayPage({
 
   return (
     <div className="space-y-6 xl:space-y-8">
-      <div className="grid gap-6 xl:grid-cols-[3fr,2fr] xl:items-start">
-        <SessionControls
-          activeSession={activeSession}
-          startConfig={startConfig}
-          onStartConfigChange={onStartConfigChange}
-          onStart={async (payload) => {
-            await onStart(payload)
-            triggerRefresh()
-          }}
-          onStop={async (comment) => {
-            await onStop(comment)
-            triggerRefresh()
-          }}
-        />
-        <TodaySummary day={today} refreshKey={refreshKey} />
-      </div>
-      <div className="grid gap-6 xl:grid-cols-[2fr,1fr] xl:items-start">
+      <SessionControls
+        activeSession={activeSession}
+        startConfig={startConfig}
+        onStartConfigChange={onStartConfigChange}
+        onStart={async (payload) => {
+          await onStart(payload)
+          triggerRefresh()
+        }}
+        onStop={async (comment) => {
+          await onStop(comment)
+          triggerRefresh()
+        }}
+      />
+      <div className="grid gap-6 xl:grid-cols-[2.2fr,1fr] xl:items-start">
         <div className="space-y-6">
           <SubtrackManager day={today} refreshKey={refreshKey} />
         </div>

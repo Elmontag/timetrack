@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from .config import Settings
 from .models import AppSetting
+from .utils import normalize_calendar_identifier, normalize_calendar_selection
 
 
 class RuntimeState:
@@ -21,11 +22,12 @@ class RuntimeState:
         self.caldav_url: Optional[str] = base_settings.caldav_url
         self.caldav_user: Optional[str] = base_settings.caldav_user
         self.caldav_password: Optional[str] = base_settings.caldav_password
-        base_selection = list(base_settings.caldav_selected_calendars)
-        if not base_selection and base_settings.caldav_default_cal:
-            base_selection = [base_settings.caldav_default_cal]
+        base_selection = normalize_calendar_selection(base_settings.caldav_selected_calendars)
+        default_cal = normalize_calendar_identifier(base_settings.caldav_default_cal)
+        if not base_selection and default_cal:
+            base_selection = [default_cal]
         self.caldav_selected_calendars: List[str] = base_selection
-        self.caldav_default_cal: Optional[str] = base_settings.caldav_default_cal
+        self.caldav_default_cal: Optional[str] = default_cal
         self.expected_daily_hours: Optional[float] = base_settings.expected_daily_hours
         self.expected_weekly_hours: Optional[float] = base_settings.expected_weekly_hours
 
@@ -69,9 +71,11 @@ class RuntimeState:
                 else:
                     self.caldav_password = password or None
             if "caldav_default_cal" in updates:
-                self.caldav_default_cal = updates.get("caldav_default_cal") or None
+                self.caldav_default_cal = normalize_calendar_identifier(
+                    updates.get("caldav_default_cal")
+                )
             if "caldav_selected_calendars" in updates and updates["caldav_selected_calendars"] is not None:
-                calendars = [cal.strip() for cal in updates["caldav_selected_calendars"] if cal.strip()]
+                calendars = normalize_calendar_selection(updates["caldav_selected_calendars"])
                 self.caldav_selected_calendars = calendars
             if "expected_daily_hours" in updates:
                 value = updates.get("expected_daily_hours")
@@ -111,7 +115,10 @@ class RuntimeState:
             if key == "block_ips":
                 value = json.dumps([ip.strip() for ip in value if ip.strip()])
             if key == "caldav_selected_calendars":
-                value = json.dumps([cal.strip() for cal in value if cal.strip()])
+                value = json.dumps(normalize_calendar_selection(value))
+            if key == "caldav_default_cal":
+                normalized = normalize_calendar_identifier(value)
+                value = normalized or ""
             if key == "caldav_password" and value == "__UNCHANGED__":
                 continue
             if key in {"expected_daily_hours", "expected_weekly_hours"}:

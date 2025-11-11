@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from .config import settings
 from .models import CalendarEvent, DaySummary, ExportRecord, LeaveEntry, WorkSession, WorkSubtrack
 from .state import RuntimeState
+from .utils import normalize_calendar_identifier, normalize_calendar_selection
 
 try:  # pragma: no cover - optional dependency
     from caldav import DAVClient
@@ -78,18 +79,12 @@ def _build_caldav_client(state: RuntimeState, *, strict: bool = False):
 
 
 def _calendar_matches_selection(selection: Iterable[str], *candidates: Optional[Any]) -> bool:
-    normalized: set[str] = set()
-    for entry in selection:
-        text = str(entry).strip().lower()
-        if text:
-            normalized.add(text)
+    normalized = {value.casefold() for value in normalize_calendar_selection(selection)}
     if not normalized:
         return False
     for candidate in candidates:
-        if candidate is None:
-            continue
-        text = str(candidate).strip().lower()
-        if text and text in normalized:
+        candidate_id = normalize_calendar_identifier(candidate)
+        if candidate_id and candidate_id.casefold() in normalized:
             return True
     return False
 
@@ -121,9 +116,7 @@ def fetch_caldav_calendars(state: RuntimeState) -> List[Dict[str, str]]:
     results: List[Dict[str, str]] = []
     for calendar in calendars:
         calendar_id_raw = getattr(calendar, "url", None)
-        calendar_id: Optional[str] = None
-        if calendar_id_raw is not None:
-            calendar_id = str(calendar_id_raw)
+        calendar_id = normalize_calendar_identifier(calendar_id_raw)
         display_name: Optional[str] = None
         if dav is not None and hasattr(calendar, "get_properties"):
             try:
@@ -138,9 +131,9 @@ def fetch_caldav_calendars(state: RuntimeState) -> List[Dict[str, str]]:
             if name_attr is not None:
                 display_name = str(name_attr)
         if not display_name and calendar_id:
-            display_name = calendar_id.rstrip("/").split("/")[-1]
+            display_name = calendar_id.split("/")[-1]
         if not calendar_id and display_name:
-            calendar_id = str(display_name)
+            calendar_id = normalize_calendar_identifier(display_name)
         if not calendar_id:
             continue
         results.append({"id": calendar_id, "name": display_name or calendar_id})
@@ -182,9 +175,9 @@ def sync_caldav_events(
 
     for calendar in calendars:
         calendar_id_raw = getattr(calendar, "url", None)
-        calendar_id = str(calendar_id_raw) if calendar_id_raw is not None else None
+        calendar_id = normalize_calendar_identifier(calendar_id_raw)
         calendar_name_raw = getattr(calendar, "name", None)
-        calendar_name = str(calendar_name_raw) if calendar_name_raw is not None else None
+        calendar_name = normalize_calendar_identifier(calendar_name_raw)
         if not _calendar_matches_selection(selected, calendar_id, calendar_name):
             continue
         try:
@@ -621,6 +614,13 @@ def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> 
                 for entry in normalized["caldav_selected_calendars"].split(",")
                 if entry.strip()
             ]
+        normalized["caldav_selected_calendars"] = normalize_calendar_selection(
+            normalized["caldav_selected_calendars"]
+        )
+    if "caldav_default_cal" in normalized and normalized["caldav_default_cal"] is not None:
+        normalized["caldav_default_cal"] = normalize_calendar_identifier(
+            normalized["caldav_default_cal"]
+        )
     state.apply(normalized)
     state.persist(
         db,

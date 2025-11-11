@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
 import { API_BASE } from './config'
 import {
+  DaySummary,
+  getDaySummaries,
   getSessionsForDay,
   pauseSession,
   startSession,
@@ -28,6 +30,8 @@ export default function App() {
     startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
     comment: '',
   }))
+  const [currentDay, setCurrentDay] = useState(() => dayjs().format('YYYY-MM-DD'))
+  const [daySummary, setDaySummary] = useState<DaySummary | null>(null)
 
   const triggerRefresh = useCallback(() => setRefreshKey(Date.now().toString()), [])
   const { run: runStart, loading: starting } = useAsync(startSession)
@@ -51,6 +55,22 @@ export default function App() {
     }, 60_000)
     return () => window.clearInterval(timer)
   }, [activeSession])
+
+  const loadSummary = useCallback(async () => {
+    const today = dayjs().format('YYYY-MM-DD')
+    setCurrentDay(today)
+    try {
+      const data = await getDaySummaries(today, today)
+      setDaySummary(data[0] ?? null)
+    } catch (error) {
+      console.error('Tagesübersicht konnte nicht geladen werden', error)
+      setDaySummary(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    loadSummary()
+  }, [loadSummary, refreshKey])
 
   const handleStart = useCallback(
     async (override?: { start_time?: string; comment?: string }) => {
@@ -177,6 +197,8 @@ export default function App() {
             onStop={() => handleStop()}
             loading={{ start: starting, pause: pausing, stop: stopping }}
             startPlan={startPlan}
+            day={currentDay}
+            summary={daySummary}
           />
           <nav className="flex flex-wrap gap-2">
             {[

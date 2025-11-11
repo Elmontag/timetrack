@@ -291,7 +291,7 @@ def test_caldav_calendar_listing_coerces_url_objects(monkeypatch, client: TestCl
     assert resp.status_code == 200
     payload = resp.json()
     assert payload == [
-        {"id": "https://example.com/caldav/personal/", "name": "personal"},
+        {"id": "https://example.com/caldav/personal", "name": "personal"},
     ]
 
 
