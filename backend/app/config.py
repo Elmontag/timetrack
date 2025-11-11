@@ -23,14 +23,14 @@ class Settings(BaseSettings):
     behind_proxy: bool = os.getenv("TT_BEHIND_PROXY", "false").lower() == "true"
 
     storage_backend: str = os.getenv("TT_STORAGE", "sqlite")
-    sqlite_path: Path = Path(os.getenv("TT_SQLITE_PATH", "./data/timetrack.db"))
-    json_dir: Path = Path(os.getenv("TT_JSON_DIR", "./data/state"))
+    sqlite_path: Path = Path(os.getenv("TT_SQLITE_PATH", "/data/timetrack.db"))
+    json_dir: Path = Path(os.getenv("TT_JSON_DIR", "/data/state"))
 
-    export_dir: Path = Path(os.getenv("TT_EXPORT_DIR", "./data/exports"))
+    export_dir: Path = Path(os.getenv("TT_EXPORT_DIR", "/data/exports"))
     export_pdf_engine: str = os.getenv("TT_EXPORT_PDF_ENGINE", "reportlab")
     export_xlsx_engine: str = os.getenv("TT_EXPORT_XLSX_ENGINE", "openpyxl")
 
-    travel_dir: Path = Path(os.getenv("TT_TRAVEL_DIR", "./data/travel"))
+    travel_dir: Path = Path(os.getenv("TT_TRAVEL_DIR", "/data/travel"))
 
     caldav_url: Optional[str] = os.getenv("TT_CALDAV_URL")
     caldav_user: Optional[str] = os.getenv("TT_CALDAV_USER")

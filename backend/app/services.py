@@ -61,6 +61,7 @@ TRAVEL_WORKFLOW_STATES: Dict[str, str] = {
     "requested": "Dienstreise beantragt",
     "settlement": "Reise wird abgerechnet",
     "settled": "Reise abgerechnet",
+    "reimbursed": "Kostenerstattung erhalten",
 }
 
 TRAVEL_DOCUMENT_TYPES: Set[str] = {
