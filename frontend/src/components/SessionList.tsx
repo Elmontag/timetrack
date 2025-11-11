@@ -5,6 +5,10 @@ import { deleteSession, getSessionsForDay, updateSession, WorkSession, formatDur
 
 interface Props {
   refreshKey: string
+  day?: string
+  onDayChange?: (day: string) => void
+  showDayPicker?: boolean
+  onChanged?: () => void
 }
 
 interface EditFormState {
@@ -15,24 +19,32 @@ interface EditFormState {
   tags: string
 }
 
-export function SessionList({ refreshKey }: Props) {
+export function SessionList({ refreshKey, day, onDayChange, showDayPicker = true, onChanged }: Props) {
   const [sessions, setSessions] = useState<WorkSession[]>([])
-  const [day, setDay] = useState(dayjs().format('YYYY-MM-DD'))
+  const [internalDay, setInternalDay] = useState(day ?? dayjs().format('YYYY-MM-DD'))
   const [loading, setLoading] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [form, setForm] = useState<EditFormState>({ start: '', end: '', comment: '', project: '', tags: '' })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  const effectiveDay = day ?? internalDay
+
+  useEffect(() => {
+    if (day) {
+      setInternalDay(day)
+    }
+  }, [day])
+
   const loadSessions = useCallback(async () => {
     setLoading(true)
     try {
-      const data = await getSessionsForDay(day)
+      const data = await getSessionsForDay(effectiveDay)
       setSessions(data)
     } finally {
       setLoading(false)
     }
-  }, [day])
+  }, [effectiveDay])
 
   useEffect(() => {
     loadSessions()
@@ -99,6 +111,7 @@ export function SessionList({ refreshKey }: Props) {
       setEditingId(null)
       setError(null)
       await loadSessions()
+      onChanged?.()
     } catch (err: any) {
       const detail = err?.response?.data?.detail
       setError(typeof detail === 'string' ? detail : 'Speichern fehlgeschlagen.')
@@ -118,6 +131,7 @@ export function SessionList({ refreshKey }: Props) {
         setEditingId(null)
       }
       await loadSessions()
+      onChanged?.()
     } catch (err: any) {
       const detail = err?.response?.data?.detail
       setError(typeof detail === 'string' ? detail : 'Löschen fehlgeschlagen.')
@@ -131,18 +145,28 @@ export function SessionList({ refreshKey }: Props) {
       <div className="flex items-center justify-between gap-2">
         <div>
           <h2 className="text-lg font-semibold text-slate-100">Protokoll</h2>
-          <p className="text-sm text-slate-400">Alle Einträge des ausgewählten Tages.</p>
+          <p className="text-sm text-slate-400">
+            Alle Einträge des ausgewählten Tages ({dayjs(effectiveDay).format('DD.MM.YYYY')}).
+          </p>
         </div>
-        <input
-          type="date"
-          value={day}
-          onChange={(event) => {
-            setDay(event.target.value)
-            setEditingId(null)
-            setError(null)
-          }}
-          className="rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
-        />
+        {showDayPicker && (
+          <input
+            type="date"
+            value={effectiveDay}
+            onChange={(event) => {
+              const nextDay = event.target.value
+              if (onDayChange) {
+                onDayChange(nextDay)
+              }
+              if (!day) {
+                setInternalDay(nextDay)
+              }
+              setEditingId(null)
+              setError(null)
+            }}
+            className="rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+          />
+        )}
       </div>
       <div className="mt-3 space-y-2">
         {loading && <p className="text-sm text-slate-400">Lade...</p>}

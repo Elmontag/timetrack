@@ -11,11 +11,7 @@ import {
   stopSession,
   WorkSession,
 } from './api'
-import { SessionList } from './components/SessionList'
-import { DaySummaryPanel } from './components/DaySummaryPanel'
-import { LeaveManager } from './components/LeaveManager'
 import { ExportPanel } from './components/ExportPanel'
-import { ManualEntryForm } from './components/ManualEntryForm'
 import { CalendarPanel } from './components/CalendarPanel'
 import { SettingsPanel } from './components/SettingsPanel'
 import { PermalinkLightbox } from './components/PermalinkLightbox'
@@ -28,10 +24,9 @@ import { useAsync } from './hooks/useAsync'
 export default function App() {
   const [activeSession, setActiveSession] = useState<WorkSession | null>(null)
   const [refreshKey, setRefreshKey] = useState(() => Date.now().toString())
-  const [activeTab, setActiveTab] = useState<
-    'myday' | 'work' | 'leave' | 'calendar' | 'travel' | 'exports' | 'settings'
-  >('myday')
-  const [workView, setWorkView] = useState<'log' | 'manual' | 'analysis'>('log')
+  const [activeTab, setActiveTab] = useState<'myday' | 'calendar' | 'travel' | 'exports' | 'settings'>(
+    'myday',
+  )
   const [startPlan, setStartPlan] = useState(() => ({
     startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
     comment: '',
@@ -152,44 +147,8 @@ export default function App() {
             triggerRefresh={triggerRefresh}
           />
         )
-      case 'work':
-        return (
-          <div className="space-y-6">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <h2 className="text-lg font-semibold text-slate-100">Arbeitszeit</h2>
-                <p className="text-sm text-slate-400">Protokoll, Nachträge und Auswertungen.</p>
-              </div>
-              <div className="inline-flex overflow-hidden rounded-md border border-slate-800">
-                {(
-                  [
-                    { key: 'log', label: 'Protokoll' },
-                    { key: 'manual', label: 'Arbeitszeit nachtragen' },
-                    { key: 'analysis', label: 'Monat/Woche/Jahr' },
-                  ] as { key: typeof workView; label: string }[]
-                ).map((option) => (
-                  <button
-                    key={option.key}
-                    type="button"
-                    onClick={() => setWorkView(option.key)}
-                    className={`px-3 py-1 text-xs font-medium transition-colors ${
-                      workView === option.key ? 'bg-primary text-slate-950' : 'bg-slate-950/60 text-slate-300 hover:bg-slate-800'
-                    }`}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-            {workView === 'log' && <SessionList refreshKey={refreshKey} />}
-            {workView === 'manual' && <ManualEntryForm onCreated={triggerRefresh} />}
-            {workView === 'analysis' && <DaySummaryPanel refreshKey={refreshKey} />}
-          </div>
-        )
-      case 'leave':
-        return <LeaveManager refreshKey={refreshKey} onRefreshed={triggerRefresh} />
       case 'calendar':
-        return <CalendarPanel refreshKey={refreshKey} />
+        return <CalendarPanel refreshKey={refreshKey} onDataChanged={triggerRefresh} />
       case 'travel':
         return <TravelManager />
       case 'exports':
@@ -199,7 +158,7 @@ export default function App() {
       default:
         return null
     }
-  }, [activeTab, activeSession, handleStart, handleStop, refreshKey, startPlan, triggerRefresh, workView])
+  }, [activeTab, activeSession, handleStart, handleStop, refreshKey, startPlan, triggerRefresh])
 
   return (
     <div
@@ -238,8 +197,6 @@ export default function App() {
           <nav className="flex flex-wrap gap-2">
             {[
               { key: 'myday', label: 'Mein Tag' },
-              { key: 'work', label: 'Arbeitszeit' },
-              { key: 'leave', label: 'Abwesenheiten' },
               { key: 'calendar', label: 'Kalender' },
               { key: 'travel', label: 'Dienstreisen' },
               { key: 'exports', label: 'Exporte' },

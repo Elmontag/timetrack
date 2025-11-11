@@ -1,22 +1,50 @@
 import dayjs from 'dayjs'
-import { FormEvent, useState } from 'react'
+import { FormEvent, useEffect, useState } from 'react'
 import { createManualSession } from '../api'
 
 interface Props {
   onCreated: () => void
+  defaultDate?: string
 }
 
-export function ManualEntryForm({ onCreated }: Props) {
-  const now = dayjs()
+const createInitialRange = (defaultDate?: string) => {
+  if (!defaultDate) {
+    const now = dayjs()
+    return {
+      start: now.startOf('hour').subtract(1, 'hour').format('YYYY-MM-DDTHH:mm'),
+      end: now.startOf('hour').format('YYYY-MM-DDTHH:mm'),
+    }
+  }
+  const base = dayjs(defaultDate).hour(9).minute(0).second(0)
+  return {
+    start: base.format('YYYY-MM-DDTHH:mm'),
+    end: base.add(1, 'hour').format('YYYY-MM-DDTHH:mm'),
+  }
+}
+
+export function ManualEntryForm({ onCreated, defaultDate }: Props) {
+  const initialRange = createInitialRange(defaultDate)
   const [form, setForm] = useState({
-    start: now.startOf('hour').subtract(1, 'hour').format('YYYY-MM-DDTHH:mm'),
-    end: now.startOf('hour').format('YYYY-MM-DDTHH:mm'),
+    start: initialRange.start,
+    end: initialRange.end,
     project: '',
     tags: '',
     comment: '',
   })
   const [submitting, setSubmitting] = useState(false)
   const [feedback, setFeedback] = useState<'success' | 'error' | null>(null)
+
+  useEffect(() => {
+    if (!defaultDate) {
+      return
+    }
+    const nextRange = createInitialRange(defaultDate)
+    setForm((prev) => ({
+      ...prev,
+      start: nextRange.start,
+      end: nextRange.end,
+    }))
+  }, [defaultDate])
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault()
