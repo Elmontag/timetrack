@@ -14,8 +14,10 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from openpyxl import Workbook
+from PyPDF2 import PdfMerger
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
@@ -71,6 +73,8 @@ TRAVEL_DOCUMENT_TYPES: Set[str] = {
     "Reisekostenabrechnung",
     "Sonstige Unterlagen",
 }
+
+TRAVEL_DATASET_DOCUMENT_TYPES: Set[str] = {"Rechnung", "Beleg", "Reisekostenabrechnung"}
 
 SIGNABLE_DOCUMENT_TYPES: Set[str] = {"Antrag", "Reisekostenabrechnung"}
 
@@ -1695,18 +1699,132 @@ def resolve_travel_document_path(db: Session, trip_id: int, document_id: int) ->
     return document, stored_path
 
 
-def build_travel_dataset_archive(db: Session, trip_id: int) -> Tuple[str, bytes]:
+IMAGE_EXTENSIONS: Set[str] = {".png", ".jpg", ".jpeg"}
+
+
+def _wrap_text(text: str, width: int) -> List[str]:
+    words = text.split()
+    if not words:
+        return [""]
+    lines: List[str] = []
+    current = words[0]
+    for word in words[1:]:
+        tentative = f"{current} {word}"
+        if len(tentative) > width:
+            lines.append(current)
+            current = word
+        else:
+            current = tentative
+    lines.append(current)
+    return lines
+
+
+def _collect_travel_dataset_documents(db: Session, trip_id: int) -> Tuple[TravelTrip, List[TravelDocument]]:
     trip = _get_travel_trip(db, trip_id)
     documents = (
         db.query(TravelDocument)
         .filter(
             TravelDocument.trip_id == trip.id,
-            TravelDocument.document_type.in_({"Beleg", "Reisekostenabrechnung"}),
+            TravelDocument.document_type.in_(TRAVEL_DATASET_DOCUMENT_TYPES),
         )
+        .order_by(TravelDocument.created_at.asc(), TravelDocument.id.asc())
         .all()
     )
+    return trip, documents
+
+
+def _render_dataset_cover_page(trip: TravelTrip, documents: List[TravelDocument]) -> io.BytesIO:
+    buffer = io.BytesIO()
+    page = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    page.setTitle("Reisekostenabrechnungsdatensatz")
+    page.setFont("Helvetica-Bold", 18)
+    page.drawString(2 * cm, height - 2.5 * cm, "Reisekostenabrechnungsdatensatz")
+    page.setFont("Helvetica", 11)
+    lines = [
+        f"Dienstreise: {trip.title}",
+        f"Zeitraum: {trip.start_date.strftime('%d.%m.%Y')} – {trip.end_date.strftime('%d.%m.%Y')}",
+    ]
+    if trip.destination:
+        lines.append(f"Zielort: {trip.destination}")
+    if trip.purpose:
+        lines.append(f"Reisezweck: {trip.purpose}")
+    y = height - 4 * cm
+    for entry in lines:
+        page.drawString(2 * cm, y, entry)
+        y -= 0.8 * cm
+    page.setFont("Helvetica-Bold", 12)
+    page.drawString(2 * cm, y - 0.5 * cm, "Enthaltene Dokumente")
+    y -= 1.5 * cm
+    text = page.beginText(2 * cm, y)
+    text.setFont("Helvetica", 10)
+    if documents:
+        for document in documents:
+            label = f"- {document.document_type}: {document.original_name}"
+            for wrapped in _wrap_text(label, 88):
+                text.textLine(wrapped)
+    else:
+        text.textLine("Keine Dokumente vorhanden")
+    page.drawText(text)
+    page.showPage()
+    page.save()
+    buffer.seek(0)
+    return buffer
+
+
+def _render_dataset_image_page(document: TravelDocument, path: Path) -> io.BytesIO:
+    buffer = io.BytesIO()
+    page = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    page.setFont("Helvetica-Bold", 13)
+    page.drawString(2 * cm, height - 2.5 * cm, f"{document.document_type}: {document.original_name}")
+    page.setFont("Helvetica", 9)
+    page.drawString(2 * cm, height - 3.2 * cm, f"Datei: {path.name}")
+    image = ImageReader(str(path))
+    img_width, img_height = image.getSize()
+    if img_width <= 0 or img_height <= 0:
+        raise ValueError("Ungültige Bildabmessungen")
+    available_width = width - 4 * cm
+    available_height = height - 6 * cm
+    scale = min(available_width / img_width, available_height / img_height, 1.0)
+    draw_width = img_width * scale
+    draw_height = img_height * scale
+    x = (width - draw_width) / 2
+    y = max((height - draw_height) / 2 - 0.5 * cm, 2 * cm)
+    page.drawImage(image, x, y, width=draw_width, height=draw_height, preserveAspectRatio=True, mask="auto")
+    page.showPage()
+    page.save()
+    buffer.seek(0)
+    return buffer
+
+
+def _render_dataset_placeholder_page(document: TravelDocument, message: str) -> io.BytesIO:
+    buffer = io.BytesIO()
+    page = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    page.setFont("Helvetica-Bold", 14)
+    page.drawString(2 * cm, height - 2.5 * cm, document.original_name)
+    page.setFont("Helvetica", 10)
+    text = page.beginText(2 * cm, height - 4 * cm)
+    text.textLine(f"Dokumenttyp: {document.document_type}")
+    text.textLine(f"Originaldatei: {document.original_name}")
+    text.textLine("")
+    for wrapped in _wrap_text(message, 90):
+        text.textLine(wrapped)
+    page.drawText(text)
+    page.showPage()
+    page.save()
+    buffer.seek(0)
+    return buffer
+
+
+def build_travel_dataset_archive(db: Session, trip_id: int) -> Tuple[str, bytes]:
+    trip, documents = _collect_travel_dataset_documents(db, trip_id)
     if not documents:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keine abrechnungsrelevanten Dokumente vorhanden")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Keine abrechnungsrelevanten Dokumente vorhanden",
+        )
     buffer = io.BytesIO()
     added = 0
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -1724,3 +1842,64 @@ def build_travel_dataset_archive(db: Session, trip_id: int) -> Tuple[str, bytes]
     buffer.seek(0)
     filename = f"reisekosten_{trip.start_date}_{trip.end_date}.zip"
     return filename, buffer.read()
+
+
+def build_travel_dataset_pdf(db: Session, trip_id: int) -> Tuple[str, bytes]:
+    trip, documents = _collect_travel_dataset_documents(db, trip_id)
+    if not documents:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Keine abrechnungsrelevanten Dokumente vorhanden",
+        )
+
+    merger = PdfMerger()
+    pages_added = 0
+
+    cover_page = _render_dataset_cover_page(trip, documents)
+    merger.append(cover_page)
+    pages_added += 1
+
+    for document in documents:
+        stored_path = Path(document.stored_path)
+        if not stored_path.exists():
+            placeholder = _render_dataset_placeholder_page(
+                document,
+                "Die zugehörige Originaldatei konnte nicht gefunden werden und ist daher nicht im Ausdruck enthalten.",
+            )
+            merger.append(placeholder)
+            pages_added += 1
+            continue
+
+        suffix = stored_path.suffix.lower()
+        if suffix == ".pdf":
+            merger.append(str(stored_path))
+            pages_added += 1
+        elif suffix in IMAGE_EXTENSIONS:
+            try:
+                image_page = _render_dataset_image_page(document, stored_path)
+            except Exception:  # pragma: no cover - fallback for broken images
+                placeholder = _render_dataset_placeholder_page(
+                    document,
+                    "Die Bilddatei konnte nicht verarbeitet werden. Bitte laden Sie die Originaldatei separat herunter.",
+                )
+                merger.append(placeholder)
+            else:
+                merger.append(image_page)
+            pages_added += 1
+        else:
+            placeholder = _render_dataset_placeholder_page(
+                document,
+                "Dieses Dateiformat kann nicht automatisch eingebettet werden. Bitte laden Sie die Datei separat herunter.",
+            )
+            merger.append(placeholder)
+            pages_added += 1
+
+    if pages_added == 0:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Keine druckbaren Inhalte gefunden")
+
+    output = io.BytesIO()
+    merger.write(output)
+    merger.close()
+    output.seek(0)
+    filename = f"reisekosten_{trip.start_date}_{trip.end_date}.pdf"
+    return filename, output.read()

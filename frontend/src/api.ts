@@ -88,6 +88,7 @@ export interface TravelTrip {
   updated_at: string
   documents: TravelDocument[]
   dataset_path: string
+  dataset_print_path: string
 }
 
 export interface SettingsResponse {
@@ -396,4 +397,8 @@ export function travelDocumentDownloadUrl(tripId: number, documentId: number) {
 
 export function travelDatasetDownloadUrl(datasetPath: string) {
   return `${API_BASE}${datasetPath}`
+}
+
+export function travelDatasetPrintUrl(datasetPrintPath: string) {
+  return `${API_BASE}${datasetPrintPath}`
 }

@@ -48,6 +48,7 @@ from .schemas import (
 from .services import (
     add_travel_document,
     build_travel_dataset_archive,
+    build_travel_dataset_pdf,
     create_calendar_event,
     create_holiday,
     create_subtrack,
@@ -390,6 +391,13 @@ def download_travel_dataset(trip_id: int, db: Session = Depends(get_db)) -> Resp
     filename, content = build_travel_dataset_archive(db, trip_id)
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return Response(content, media_type="application/zip", headers=headers)
+
+
+@app.get("/travels/{trip_id}/reisekostenpaket/druck")
+def print_travel_dataset(trip_id: int, db: Session = Depends(get_db)) -> Response:
+    filename, content = build_travel_dataset_pdf(db, trip_id)
+    headers = {"Content-Disposition": f'inline; filename="{filename}"'}
+    return Response(content, media_type="application/pdf", headers=headers)
 
 
 @app.post("/exports", response_model=ExportResponse, status_code=status.HTTP_201_CREATED)

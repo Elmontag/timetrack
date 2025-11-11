@@ -19,6 +19,7 @@ import {
   TravelDocument,
   TravelTrip,
   travelDatasetDownloadUrl,
+  travelDatasetPrintUrl,
   travelDocumentDownloadUrl,
   updateTravel,
   updateTravelDocument,
@@ -129,6 +130,7 @@ export function TravelManager() {
   const [expandedTrips, setExpandedTrips] = useState<number[]>([])
   const [workflowUpdating, setWorkflowUpdating] = useState<number | null>(null)
   const [updatingDocId, setUpdatingDocId] = useState<number | null>(null)
+  const [openDatasetMenuId, setOpenDatasetMenuId] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const draftIdCounter = useRef(0)
 
@@ -211,6 +213,7 @@ export function TravelManager() {
       const data = await listTravels()
       setTrips(data)
       setExpandedTrips((prev) => prev.filter((id) => data.some((trip) => trip.id === id)))
+      setOpenDatasetMenuId(null)
       return data
     } catch (error) {
       console.error('Dienstreisen konnten nicht geladen werden', error)
@@ -237,12 +240,14 @@ export function TravelManager() {
   )
 
   const openCreateModal = () => {
+    setOpenDatasetMenuId(null)
     setFormModal({ mode: 'create' })
     setFormState(defaultFormState())
     setFormError(null)
   }
 
   const openEditModal = (trip: TravelTrip) => {
+    setOpenDatasetMenuId(null)
     setFormModal({ mode: 'edit', tripId: trip.id })
     setFormState({
       title: trip.title,
@@ -315,9 +320,40 @@ export function TravelManager() {
     )
   }
 
+  const toggleDatasetMenu = useCallback((tripId: number) => {
+    setOpenDatasetMenuId((prev) => (prev === tripId ? null : tripId))
+  }, [])
+
+  useEffect(() => {
+    const handleClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement | null
+      if (target?.closest('[data-dataset-menu]')) {
+        return
+      }
+      setOpenDatasetMenuId(null)
+    }
+    document.addEventListener('mousedown', handleClick)
+    return () => {
+      document.removeEventListener('mousedown', handleClick)
+    }
+  }, [])
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setOpenDatasetMenuId(null)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown)
+    }
+  }, [])
+
   const handleDelete = async (trip: TravelTrip) => {
     const confirmed = window.confirm(`Dienstreise "${trip.title}" wirklich löschen?`)
     if (!confirmed) return
+    setOpenDatasetMenuId(null)
     setGlobalError(null)
     try {
       await deleteTravel(trip.id)
@@ -352,6 +388,7 @@ export function TravelManager() {
   }
 
   const openUploadModal = (trip: TravelTrip) => {
+    setOpenDatasetMenuId(null)
     setUploadTrip(trip)
     setUploadDrafts([])
     setUploadError(null)
@@ -584,12 +621,43 @@ export function TravelManager() {
                   >
                     Dokument hochladen
                   </button>
-                  <a
-                    href={travelDatasetDownloadUrl(trip.dataset_path)}
-                    className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
-                  >
-                    Reisekostenabrechnungsdatensatz
-                  </a>
+                  <div className="relative" data-dataset-menu>
+                    <button
+                      type="button"
+                      onClick={() => toggleDatasetMenu(trip.id)}
+                      className="inline-flex items-center gap-1 rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                      aria-haspopup="menu"
+                      aria-expanded={openDatasetMenuId === trip.id}
+                    >
+                      Reisekostenabrechnungsdatensatz
+                      <span aria-hidden="true" className="text-[10px]">▾</span>
+                    </button>
+                    {openDatasetMenuId === trip.id && (
+                      <div
+                        className="absolute right-0 z-30 mt-1 w-48 rounded-md border border-slate-800 bg-slate-950/95 p-1 shadow-lg"
+                        role="menu"
+                      >
+                        <a
+                          href={travelDatasetDownloadUrl(trip.dataset_path)}
+                          className="block rounded px-3 py-2 text-left text-xs text-slate-200 hover:bg-slate-900 hover:text-primary"
+                          role="menuitem"
+                          onClick={() => setOpenDatasetMenuId(null)}
+                        >
+                          Download als ZIP
+                        </a>
+                        <a
+                          href={travelDatasetPrintUrl(trip.dataset_print_path)}
+                          className="mt-1 block rounded px-3 py-2 text-left text-xs text-slate-200 hover:bg-slate-900 hover:text-primary"
+                          role="menuitem"
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={() => setOpenDatasetMenuId(null)}
+                        >
+                          Direkt drucken (PDF)
+                        </a>
+                      </div>
+                    )}
+                  </div>
                   <button
                     type="button"
                     onClick={() => handleDelete(trip)}

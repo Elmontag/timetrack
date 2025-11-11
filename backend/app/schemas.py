@@ -343,6 +343,7 @@ class TravelTripResponse(BaseModel):
             "updated_at": _serialize_datetime(self.updated_at),
             "documents": [doc._serialize() for doc in self.documents],
             "dataset_path": f"/travels/{self.id}/reisekostenpaket",
+            "dataset_print_path": f"/travels/{self.id}/reisekostenpaket/druck",
         }
 
 
