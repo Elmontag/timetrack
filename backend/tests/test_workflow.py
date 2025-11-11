@@ -263,6 +263,38 @@ def test_caldav_calendar_listing(monkeypatch, client: TestClient):
     assert payload[1]["name"] == "Privat"
 
 
+def test_caldav_calendar_listing_coerces_url_objects(monkeypatch, client: TestClient):
+    class DummyURL:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+        def __str__(self) -> str:
+            return self.value
+
+    class DummyCalendar:
+        def __init__(self, url: DummyURL) -> None:
+            self.url = url
+            self.name = None
+
+    class DummyPrincipal:
+        def calendars(self):
+            return [DummyCalendar(DummyURL("https://example.com/caldav/personal/"))]
+
+    class DummyClient:
+        def principal(self):
+            return DummyPrincipal()
+
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=True: DummyClient())
+    monkeypatch.setattr(services, "dav", None)
+
+    resp = client.get("/caldav/calendars")
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload == [
+        {"id": "https://example.com/caldav/personal/", "name": "personal"},
+    ]
+
+
 def test_caldav_authorization_error_without_attribute(monkeypatch, client: TestClient):
     class DummyError(Exception):
         pass

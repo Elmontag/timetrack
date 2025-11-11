@@ -113,7 +113,10 @@ def fetch_caldav_calendars(state: RuntimeState) -> List[Dict[str, str]]:
 
     results: List[Dict[str, str]] = []
     for calendar in calendars:
-        calendar_id = getattr(calendar, "url", None)
+        calendar_id_raw = getattr(calendar, "url", None)
+        calendar_id: Optional[str] = None
+        if calendar_id_raw is not None:
+            calendar_id = str(calendar_id_raw)
         display_name: Optional[str] = None
         if dav is not None and hasattr(calendar, "get_properties"):
             try:
@@ -124,11 +127,13 @@ def fetch_caldav_calendars(state: RuntimeState) -> List[Dict[str, str]]:
             except Exception:  # pragma: no cover - best effort only
                 display_name = None
         if not display_name:
-            display_name = getattr(calendar, "name", None)
+            name_attr = getattr(calendar, "name", None)
+            if name_attr is not None:
+                display_name = str(name_attr)
         if not display_name and calendar_id:
             display_name = calendar_id.rstrip("/").split("/")[-1]
-        if not calendar_id:
-            calendar_id = display_name
+        if not calendar_id and display_name:
+            calendar_id = str(display_name)
         if not calendar_id:
             continue
         results.append({"id": calendar_id, "name": display_name or calendar_id})
