@@ -81,7 +81,7 @@ docker compose up --build
 # API: http://127.0.0.1:8080  |  Frontend: http://127.0.0.1:5173
 ```
 
-Die Compose-Datei baut zwei Images (Backend & Frontend). Artefakte landen in `./data` (bind-mount). Für Produktion empfiehlt sich ein vorgeschalteter Reverse Proxy (TLS, Basic Auth, Rate-Limit).
+Die Compose-Datei baut zwei Images (Backend & Frontend). Artefakte landen in `./data` (bind-mount). Standardmäßig erlaubt das Backend Zugriffe von `127.0.0.1` sowie dem privaten Docker-Netz (`172.16.0.0/12`), sodass das Frontend im Compose-Netzwerk kommunizieren kann. Passe `TT_ALLOW_IPS` bei Bedarf an dein tatsächliches Netz an. Für Produktion empfiehlt sich ein vorgeschalteter Reverse Proxy (TLS, Basic Auth, Rate-Limit).
 
 ## Tests
 
