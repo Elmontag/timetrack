@@ -21,9 +21,9 @@ from .state import RuntimeState
 
 try:  # pragma: no cover - optional dependency
     from caldav import DAVClient
-    from caldav import dav
+    from caldav.elements import dav
     from caldav.lib import error as caldav_error
-except Exception:  # pragma: no cover - caldav optional
+except ImportError:  # pragma: no cover - caldav optional
     DAVClient = None  # type: ignore[assignment]
     dav = None  # type: ignore[assignment]
     caldav_error = None  # type: ignore[assignment]
