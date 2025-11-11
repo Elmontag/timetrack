@@ -15,7 +15,7 @@
 * **Lokaler Zugriff & IP‑Allowlist** – by default nur von `127.0.0.1` erreichbar; optional Freigabe für definierte IP‑Ranges.
 * **Offline‑freundlich** – Primär **SQLite**; alternativ **JSON‑Statefiles** für sehr schlanke/portierbare Setups.
 * **Saubere API** – dokumentiert via OpenAPI/Swagger; HMAC‑signierte Aktions‑Tokens (Permalinks) mit Ablauf & Scope.
-* **Unkomplizierte Einstellungen** Alle Einstellungen für Kalendersync, Nutzerdaten und Personendaten können in einem übersichtlichen Einstellungsmenü angepasst werden
+* **Unkomplizierte Einstellungen** Alle Einstellungen für Kalendersync, Nutzerdaten und Personendaten, IP-Allowlist, etc. können in einem übersichtlichen Einstellungsmenü angepasst werden
 ---
 
 ## Architektur
