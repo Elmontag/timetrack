@@ -83,9 +83,10 @@ interface LightboxProps {
   onClose: () => void
   children: ReactNode
   footer?: ReactNode
+  contentClassName?: string
 }
 
-function Lightbox({ open, title, onClose, children, footer }: LightboxProps) {
+function Lightbox({ open, title, onClose, children, footer, contentClassName }: LightboxProps) {
   if (!open) return null
 
   return (
@@ -108,7 +109,7 @@ function Lightbox({ open, title, onClose, children, footer }: LightboxProps) {
             Schließen
           </button>
         </div>
-        <div className="mt-4 space-y-4 text-sm text-slate-200">{children}</div>
+        <div className={clsx('mt-4 space-y-4 text-sm text-slate-200', contentClassName)}>{children}</div>
         {footer && <div className="mt-6 flex justify-end gap-3">{footer}</div>}
       </div>
     </div>
@@ -131,6 +132,14 @@ export function TravelManager() {
   const [workflowUpdating, setWorkflowUpdating] = useState<number | null>(null)
   const [updatingDocId, setUpdatingDocId] = useState<number | null>(null)
   const [openDatasetMenuId, setOpenDatasetMenuId] = useState<number | null>(null)
+  const [archivedModalOpen, setArchivedModalOpen] = useState(false)
+  const [archivedSearch, setArchivedSearch] = useState({
+    title: '',
+    destination: '',
+    date: '',
+  })
+  const [archivedPage, setArchivedPage] = useState(1)
+  const [archivedPageSize, setArchivedPageSize] = useState(10)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const draftIdCounter = useRef(0)
 
@@ -238,6 +247,51 @@ export function TravelManager() {
     () => trips.filter((trip) => trip.workflow_state === FINAL_WORKFLOW_STATE),
     [trips],
   )
+  const filteredArchivedTrips = useMemo(() => {
+    const titleQuery = archivedSearch.title.trim().toLowerCase()
+    const destinationQuery = archivedSearch.destination.trim().toLowerCase()
+    const dateQuery = archivedSearch.date.trim()
+
+    return archivedTrips.filter((trip) => {
+      const matchesTitle = titleQuery
+        ? trip.title.toLowerCase().includes(titleQuery)
+        : true
+      const matchesDestination = destinationQuery
+        ? (trip.destination ?? '').toLowerCase().includes(destinationQuery)
+        : true
+      const matchesDate = dateQuery
+        ? dateQuery >= trip.start_date && dateQuery <= trip.end_date
+        : true
+
+      return matchesTitle && matchesDestination && matchesDate
+    })
+  }, [archivedTrips, archivedSearch])
+  const totalArchivedPages = useMemo(
+    () => Math.max(1, Math.ceil(filteredArchivedTrips.length / archivedPageSize)),
+    [filteredArchivedTrips.length, archivedPageSize],
+  )
+  const paginatedArchivedTrips = useMemo(() => {
+    const start = (archivedPage - 1) * archivedPageSize
+    return filteredArchivedTrips.slice(start, start + archivedPageSize)
+  }, [filteredArchivedTrips, archivedPage, archivedPageSize])
+
+  useEffect(() => {
+    setArchivedPage(1)
+  }, [archivedSearch.title, archivedSearch.destination, archivedSearch.date, archivedPageSize])
+
+  useEffect(() => {
+    if (archivedPage > totalArchivedPages) {
+      setArchivedPage(totalArchivedPages)
+    }
+  }, [archivedPage, totalArchivedPages])
+
+  const goToPreviousArchivedPage = () => {
+    setArchivedPage((prev) => Math.max(1, prev - 1))
+  }
+
+  const goToNextArchivedPage = () => {
+    setArchivedPage((prev) => Math.min(totalArchivedPages, prev + 1))
+  }
 
   const openCreateModal = () => {
     setOpenDatasetMenuId(null)
@@ -263,6 +317,23 @@ export function TravelManager() {
   const closeFormModal = () => {
     setFormModal(null)
     setFormError(null)
+  }
+
+  const openArchivedModal = () => {
+    setOpenDatasetMenuId(null)
+    setArchivedModalOpen(true)
+  }
+
+  const closeArchivedModal = () => {
+    setOpenDatasetMenuId(null)
+    setArchivedModalOpen(false)
+  }
+
+  const handleArchivedSearchChange = (
+    field: keyof typeof archivedSearch,
+    value: string,
+  ) => {
+    setArchivedSearch((prev) => ({ ...prev, [field]: value }))
   }
 
   const handleFormChange = (field: keyof TravelFormState, value: string) => {
@@ -752,13 +823,23 @@ export function TravelManager() {
             Verwalte laufende Reisen, behalte Dokumente im Blick und archiviere abgeschlossene Vorgänge.
           </p>
         </div>
-        <button
-          type="button"
-          onClick={openCreateModal}
-          className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90"
-        >
-          Neue Dienstreise
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={openArchivedModal}
+            disabled={archivedTrips.length === 0}
+            className="inline-flex items-center rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:border-primary hover:text-primary disabled:opacity-50"
+          >
+            Archiviert
+          </button>
+          <button
+            type="button"
+            onClick={openCreateModal}
+            className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90"
+          >
+            Neue Dienstreise
+          </button>
+        </div>
       </div>
 
       {globalError && <p className="text-sm text-rose-300">{globalError}</p>}
@@ -770,26 +851,113 @@ export function TravelManager() {
             Es werden nur Reisen angezeigt, die noch nicht als "Kostenerstattung erhalten" markiert sind.
           </p>
         </header>
-        {loading ? (
-          <p className="text-sm text-slate-400">Lade Dienstreisen…</p>
-        ) : activeTrips.length === 0 ? (
-          <p className="text-sm text-slate-400">Alle Dienstreisen sind abgeschlossen.</p>
-        ) : (
-          <ul className="space-y-4">{activeTrips.map((trip) => renderTrip(trip))}</ul>
-        )}
+      {loading ? (
+        <p className="text-sm text-slate-400">Lade Dienstreisen…</p>
+      ) : activeTrips.length === 0 ? (
+        <p className="text-sm text-slate-400">Alle Dienstreisen sind abgeschlossen.</p>
+      ) : (
+        <ul className="space-y-4">{activeTrips.map((trip) => renderTrip(trip))}</ul>
+      )}
       </section>
 
-      {archivedTrips.length > 0 && (
-        <section className="space-y-3 border-t border-slate-800 pt-4">
-          <header>
-            <h3 className="text-sm font-semibold text-slate-200">Archivierte Dienstreisen</h3>
-            <p className="text-xs text-slate-500">
-              Reisen im Status "Kostenerstattung erhalten" werden hier gesammelt.
-            </p>
-          </header>
-          <ul className="space-y-4">{archivedTrips.map((trip) => renderTrip(trip))}</ul>
-        </section>
-      )}
+      <Lightbox
+        open={archivedModalOpen}
+        title="Archivierte Dienstreisen"
+        onClose={closeArchivedModal}
+        contentClassName="max-h-[70vh] overflow-y-auto pr-1"
+      >
+        <form
+          className="grid gap-3 rounded-xl border border-slate-800 bg-slate-950/60 p-4 md:grid-cols-3"
+          onSubmit={(event) => event.preventDefault()}
+        >
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Titel
+            <input
+              type="text"
+              value={archivedSearch.title}
+              onChange={(event) => handleArchivedSearchChange('title', event.target.value)}
+              placeholder="z. B. Konferenz"
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Ort
+            <input
+              type="text"
+              value={archivedSearch.destination}
+              onChange={(event) => handleArchivedSearchChange('destination', event.target.value)}
+              placeholder="z. B. Berlin"
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Datum
+            <input
+              type="date"
+              value={archivedSearch.date}
+              onChange={(event) => handleArchivedSearchChange('date', event.target.value)}
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </label>
+        </form>
+
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+          <span>
+            {filteredArchivedTrips.length} archivierte Reise
+            {filteredArchivedTrips.length === 1 ? '' : 'n'} gefunden
+          </span>
+          <label className="flex items-center gap-2">
+            <span>Pro Seite:</span>
+            <select
+              value={archivedPageSize}
+              onChange={(event) => setArchivedPageSize(Number(event.target.value))}
+              className="rounded-md border border-slate-700 bg-slate-950/60 px-2 py-1 text-xs text-slate-200 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            >
+              {[10, 20, 50].map((size) => (
+                <option key={size} value={size}>
+                  {size}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+
+        {filteredArchivedTrips.length === 0 ? (
+          <p className="rounded-xl border border-slate-800 bg-slate-950/40 p-6 text-center text-sm text-slate-400">
+            Keine archivierten Dienstreisen gefunden.
+          </p>
+        ) : (
+          <ul className="space-y-4">
+            {paginatedArchivedTrips.map((trip) => renderTrip(trip))}
+          </ul>
+        )}
+
+        {filteredArchivedTrips.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-slate-800 pt-4 text-xs text-slate-400">
+            <span>
+              Seite {archivedPage} von {totalArchivedPages}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={goToPreviousArchivedPage}
+                disabled={archivedPage === 1}
+                className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary disabled:opacity-50"
+              >
+                Zurück
+              </button>
+              <button
+                type="button"
+                onClick={goToNextArchivedPage}
+                disabled={archivedPage === totalArchivedPages || filteredArchivedTrips.length === 0}
+                className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary disabled:opacity-50"
+              >
+                Weiter
+              </button>
+            </div>
+          </div>
+        )}
+      </Lightbox>
 
       <Lightbox
         open={Boolean(formModal)}
