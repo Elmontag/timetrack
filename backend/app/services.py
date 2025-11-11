@@ -253,15 +253,7 @@ def sync_caldav_events(
             ) from exc
         for occurrence in occurrences:
             component = getattr(occurrence, "icalendar_component", None)
-            vevent = None
-            if component is not None:
-                if hasattr(component, "subcomponents"):
-                    for sub in component.subcomponents:  # type: ignore[attr-defined]
-                        if getattr(sub, "name", "").upper() == "VEVENT":
-                            vevent = sub
-                            break
-                if vevent is None and hasattr(component, "vevent"):
-                    vevent = component.vevent
+            vevent = _extract_vevent(component)
             if vevent is None:
                 continue
             summary = vevent.get("summary")
@@ -292,6 +284,41 @@ def sync_caldav_events(
 
     if updated:
         db.commit()
+
+
+def _extract_vevent(component: Any) -> Optional[Any]:
+    """Return the VEVENT component from a CalDAV occurrence."""
+
+    if component is None:
+        return None
+
+    candidates: List[Any] = [component]
+
+    direct = getattr(component, "vevent", None)
+    if direct is not None:
+        candidates.append(direct)
+
+    subcomponents = getattr(component, "subcomponents", None)
+    if subcomponents:
+        candidates.extend(subcomponents)
+
+    for candidate in candidates:
+        if candidate is None:
+            continue
+
+        name = getattr(candidate, "name", None)
+        if isinstance(name, str) and name.upper() == "VEVENT":
+            return candidate
+
+        get = getattr(candidate, "get", None)
+        if callable(get):
+            try:
+                if get("dtstart") is not None or get("summary") is not None:
+                    return candidate
+            except Exception:  # pragma: no cover - defensive guard
+                continue
+
+    return None
 
 def _expected_daily_seconds(state: RuntimeState) -> int:
     if state.expected_daily_hours is not None:

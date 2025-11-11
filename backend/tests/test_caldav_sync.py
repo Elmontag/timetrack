@@ -17,6 +17,7 @@ class FakeVEvent:
             "location": None,
             "description": None,
         }
+        self.name = "VEVENT"
 
     def get(self, key: str):  # pragma: no cover - defensive fallback
         return self._data.get(key)
@@ -30,6 +31,26 @@ class FakeComponent:
 class FakeOccurrence:
     def __init__(self, summary: str, start: dt.datetime, end: dt.datetime):
         self.icalendar_component = FakeComponent(summary, start, end)
+
+
+class StandaloneVEvent:
+    """Mimics the icalendar.Event returned directly by caldav."""
+
+    def __init__(self, summary: str, start: dt.datetime, end: dt.datetime):
+        self.name = "VEVENT"
+        self._data = {
+            "summary": summary,
+            "dtstart": start,
+            "dtend": end,
+        }
+
+    def get(self, key: str):
+        return self._data.get(key)
+
+
+class StandaloneOccurrence:
+    def __init__(self, summary: str, start: dt.datetime, end: dt.datetime):
+        self.icalendar_component = StandaloneVEvent(summary, start, end)
 
 
 class FakePrincipal:
@@ -88,6 +109,28 @@ def test_sync_falls_back_to_non_expanded_search(monkeypatch, session):
     assert len(calendar.calls) == 2
     assert calendar.calls[0][2] is True
     assert calendar.calls[1][2] is False
+
+
+def test_sync_accepts_direct_vevent_occurrence(monkeypatch, session):
+    class DirectCalendar:
+        def __init__(self):
+            self.url = "https://example.com/caldav/calendars/personal"
+            self.name = "Personal"
+
+        def date_search(self, *args, **kwargs):
+            event_start = dt.datetime(2024, 1, 2, 9, tzinfo=dt.timezone.utc)
+            event_end = event_start + dt.timedelta(hours=2)
+            return [StandaloneOccurrence("Planning", event_start, event_end)]
+
+    calendar = DirectCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    state = _prepare_state()
+    events = services.list_calendar_events(session, state, dt.date(2024, 1, 2), dt.date(2024, 1, 2))
+
+    assert len(events) == 1
+    assert events[0].title == "Planning"
 
 
 def test_sync_raises_http_error_when_all_attempts_fail(monkeypatch, session):
