@@ -38,6 +38,13 @@ class Settings(BaseSettings):
     locale: str = os.getenv("TT_LOCALE", "de-DE")
     timezone: str = os.getenv("TZ", "Europe/Berlin")
 
+    expected_daily_hours: float = float(os.getenv("TT_EXPECTED_DAILY_HOURS", "8"))
+    expected_weekly_hours: Optional[float] = (
+        float(os.getenv("TT_EXPECTED_WEEKLY_HOURS"))
+        if os.getenv("TT_EXPECTED_WEEKLY_HOURS")
+        else None
+    )
+
     token_secret: str = os.getenv("TT_TOKEN_SECRET", "change-me")
 
     rate_limit_per_minute: int = int(os.getenv("TT_RATE_LIMIT", "60"))

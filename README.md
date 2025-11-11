@@ -24,13 +24,14 @@ TimeTrack ist eine selbstgehostete Stempeluhr mit React-Frontend und FastAPI-Bac
 ## Features im MVP
 
 - ⏱️ **Arbeitszeit starten/pausieren/stoppen** – direkt in der UI oder per Token-Link (`/a/<token>`) inkl. Live-Laufzeitanzeige
+- 🗓️ **Mein Tag Dashboard** – Startseite mit Laufzeituhr, Tagesstatistik, aktuellem Kalender und Subtracks (Meetings, Projekte, Notizen)
 - 📝 **Nachträgliche Erfassung** – Meetings & vergessene Blöcke per Formular nachtragen
 - 📅 **Kalender- und Tagesübersichten** – Tages-, Monats- und Jahresansicht mit Stundenanalyse
 - 🌴 **Urlaub & Arbeitsunfähigkeit** – Erfassung inkl. Kommentar & Genehmigungsstatus
 - 📆 **Kalenderabgleich** – Termine im internen Kalender als „Teilgenommen“/„Nicht teilgenommen“ markieren
 - 📤 **Exporte** – Stundenzettel oder Abwesenheiten als PDF oder XLSX, Ablage im Export-Verzeichnis
 - 🔐 **Sicherheit** – IP-Blocklist, HMAC-Token mit TTL, optional IP-Bindung & Einmal-Token
-- ⚙️ **Einstellungsmenü** – IP-Blocklist und CalDAV-Zugangsdaten direkt in der UI pflegen
+- ⚙️ **Einstellungsmenü** – IP-Blocklist, Soll-Stunden (Tag/Woche) und CalDAV-Zugangsdaten direkt in der UI pflegen
 - 🛠️ **API** – REST/JSON, OpenAPI-Schema (`/docs`) und Healthcheck (`/healthz`)
 
 ## Voraussetzungen
@@ -57,6 +58,8 @@ export TT_HOST=127.0.0.1
 export TT_PORT=8080
 export TT_TOKEN_SECRET="super-secret"
 export TT_BLOCK_IPS="192.168.0.0/24"
+export TT_EXPECTED_DAILY_HOURS=8
+export TT_EXPECTED_WEEKLY_HOURS=40
 ```
 
 Beim ersten Start werden Datenbank & Exportordner automatisch angelegt.
@@ -104,6 +107,8 @@ Die Backend-Tests verifizieren den kompletten Workflow (Start/Pause/Stop, Export
 | `/work/pause`         | POST    | Pause / Fortsetzen              |
 | `/work/stop`          | POST    | Arbeitszeit stoppen             |
 | `/work/day/{yyyy-mm-dd}` | GET  | Sitzungen eines Tages           |
+| `/work/subtracks/{yyyy-mm-dd}` | GET  | Subtracks (Meetings/Tags) des Tages |
+| `/work/subtracks`        | POST    | Subtrack für einen Tag erfassen |
 | `/work/manual`        | POST    | Arbeitszeit nachtragen          |
 | `/days?from&to`       | GET     | Tages-Summaries im Zeitraum     |
 | `/leaves`             | GET/POST| Urlaub/AU verwalten             |
@@ -118,11 +123,12 @@ Die Backend-Tests verifizieren den kompletten Workflow (Start/Pause/Stop, Export
 
 Die React-App bietet einen klar strukturierten Flow:
 
-1. **Arbeitszeit:** Live-Steuerung, Nachtrag-Formular, Tagesprotokoll & Analyse (Tag/Monat/Jahr)
-2. **Abwesenheiten:** Formular + Liste für Urlaub/AU
-3. **Kalender:** Termine importieren/erfassen und Teilnahme markieren
-4. **Exporte:** Zeitraum/Typ/Format wählen mit direktem Download
-5. **Einstellungen:** IP-Blocklist & CalDAV-Zugang per UI pflegen
+1. **Mein Tag:** Laufzeituhr, Tagesstatistik, Kalendereinträge und Subtrack-Verwaltung
+2. **Arbeitszeit:** Protokoll, Nachtrag-Formular & Analyse (Tag/Monat/Jahr)
+3. **Abwesenheiten:** Formular + Liste für Urlaub/AU
+4. **Kalender:** Termine importieren/erfassen und Teilnahme markieren
+5. **Exporte:** Zeitraum/Typ/Format wählen mit direktem Download
+6. **Einstellungen:** IP-Blocklist, Soll-Stunden & CalDAV-Zugang per UI pflegen
 
 Tailwind CSS sorgt für ein dunkles, kontrastreiches Theme, optimiert für Desktop & Tablet.
 

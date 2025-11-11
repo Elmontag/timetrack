@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import datetime as dt
 from pathlib import Path
-from typing import Iterable, List, Optional
+from typing import Iterable, List, Optional, Tuple
+
+from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException, status
 from openpyxl import Workbook
@@ -13,12 +15,44 @@ from sqlalchemy import and_, func
 from sqlalchemy.orm import Session
 
 from .config import settings
-from .models import CalendarEvent, DaySummary, ExportRecord, LeaveEntry, WorkSession
+from .models import CalendarEvent, DaySummary, ExportRecord, LeaveEntry, WorkSession, WorkSubtrack
 from .state import RuntimeState
 
 
+UTC = dt.timezone.utc
+LOCAL_TZ = ZoneInfo(settings.timezone)
+
+
 def _now() -> dt.datetime:
-    return dt.datetime.utcnow()
+    return dt.datetime.now(UTC)
+
+
+def _ensure_utc(value: dt.datetime) -> dt.datetime:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=LOCAL_TZ)
+    return value.astimezone(UTC)
+
+
+def _day_bounds(day: dt.date) -> Tuple[dt.datetime, dt.datetime]:
+    start_local = dt.datetime.combine(day, dt.time.min, tzinfo=LOCAL_TZ)
+    end_local = start_local + dt.timedelta(days=1)
+    return start_local.astimezone(UTC), end_local.astimezone(UTC)
+
+
+def _expected_daily_seconds(state: RuntimeState) -> int:
+    if state.expected_daily_hours is not None:
+        return int(state.expected_daily_hours * 3600)
+    if state.expected_weekly_hours is not None:
+        return int(state.expected_weekly_hours / 5 * 3600)
+    return int(settings.expected_daily_hours * 3600)
+
+
+def _from_db_datetime(value: Optional[dt.datetime]) -> Optional[dt.datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
 
 
 def get_active_session(db: Session) -> Optional[WorkSession]:
@@ -64,7 +98,7 @@ def pause_or_resume_session(db: Session) -> WorkSession:
     return session
 
 
-def stop_session(db: Session, comment: Optional[str] = None) -> WorkSession:
+def stop_session(db: Session, state: RuntimeState, comment: Optional[str] = None) -> WorkSession:
     session = get_active_session(db)
     if not session:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No active session")
@@ -75,12 +109,14 @@ def stop_session(db: Session, comment: Optional[str] = None) -> WorkSession:
     db.add(session)
     db.commit()
     db.refresh(session)
-    update_day_summary(db, session.start_time.date())
+    start_local = _from_db_datetime(session.start_time).astimezone(LOCAL_TZ)
+    update_day_summary(db, start_local.date(), state)
     return session
 
 
 def create_manual_session(
     db: Session,
+    state: RuntimeState,
     start_time: dt.datetime,
     end_time: dt.datetime,
     project: Optional[str],
@@ -89,11 +125,13 @@ def create_manual_session(
 ) -> WorkSession:
     if end_time <= start_time:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="End time must be after start time")
-    duration = end_time - start_time
+    start_time_utc = _ensure_utc(start_time)
+    end_time_utc = _ensure_utc(end_time)
+    duration = end_time_utc - start_time_utc
     total_seconds = int(duration.total_seconds())
     session = WorkSession(
-        start_time=start_time,
-        stop_time=end_time,
+        start_time=start_time_utc,
+        stop_time=end_time_utc,
         status="stopped",
         project=project,
         tags=tags,
@@ -104,13 +142,12 @@ def create_manual_session(
     db.add(session)
     db.commit()
     db.refresh(session)
-    update_day_summary(db, start_time.date())
+    update_day_summary(db, start_time_utc.astimezone(LOCAL_TZ).date(), state)
     return session
 
 
 def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
-    start = dt.datetime.combine(day, dt.time.min)
-    end = start + dt.timedelta(days=1)
+    start, end = _day_bounds(day)
     sessions = (
         db.query(WorkSession)
         .filter(and_(WorkSession.start_time >= start, WorkSession.start_time < end))
@@ -120,9 +157,8 @@ def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
     return sessions
 
 
-def compute_day_summary(db: Session, day: dt.date) -> DaySummary:
-    start = dt.datetime.combine(day, dt.time.min)
-    end = start + dt.timedelta(days=1)
+def compute_day_summary(db: Session, day: dt.date, state: RuntimeState) -> DaySummary:
+    start, end = _day_bounds(day)
     totals = (
         db.query(
             func.sum(WorkSession.total_seconds).label("work_seconds"),
@@ -143,7 +179,7 @@ def compute_day_summary(db: Session, day: dt.date) -> DaySummary:
     )
     summary.work_seconds = int(totals.work_seconds or 0)
     summary.pause_seconds = int(totals.pause_seconds or 0)
-    expected_daily_seconds = 8 * 3600
+    expected_daily_seconds = _expected_daily_seconds(state)
     summary.overtime_seconds = summary.work_seconds - expected_daily_seconds
     summary.updated_at = _now()
     db.add(summary)
@@ -152,17 +188,57 @@ def compute_day_summary(db: Session, day: dt.date) -> DaySummary:
     return summary
 
 
-def update_day_summary(db: Session, day: dt.date) -> DaySummary:
-    return compute_day_summary(db, day)
+def update_day_summary(db: Session, day: dt.date, state: RuntimeState) -> DaySummary:
+    return compute_day_summary(db, day, state)
 
 
-def range_day_summaries(db: Session, start_day: dt.date, end_day: dt.date) -> List[DaySummary]:
+def range_day_summaries(db: Session, start_day: dt.date, end_day: dt.date, state: RuntimeState) -> List[DaySummary]:
     summaries: List[DaySummary] = []
     current = start_day
     while current <= end_day:
-        summaries.append(compute_day_summary(db, current))
+        summaries.append(compute_day_summary(db, current, state))
         current += dt.timedelta(days=1)
     return summaries
+
+
+def create_subtrack(
+    db: Session,
+    state: RuntimeState,
+    day: dt.date,
+    title: str,
+    start_time: Optional[dt.datetime],
+    end_time: Optional[dt.datetime],
+    project: Optional[str],
+    tags: List[str],
+    note: Optional[str],
+) -> WorkSubtrack:
+    start_time_utc = _ensure_utc(start_time) if start_time else None
+    end_time_utc = _ensure_utc(end_time) if end_time else None
+    if start_time_utc and end_time_utc and end_time_utc <= start_time_utc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subtrack end must be after start")
+    subtrack = WorkSubtrack(
+        day=day,
+        title=title,
+        start_time=start_time_utc,
+        end_time=end_time_utc,
+        project=project,
+        tags=tags,
+        note=note,
+    )
+    db.add(subtrack)
+    db.commit()
+    db.refresh(subtrack)
+    update_day_summary(db, day, state)
+    return subtrack
+
+
+def list_subtracks(db: Session, day: dt.date) -> List[WorkSubtrack]:
+    return (
+        db.query(WorkSubtrack)
+        .filter(WorkSubtrack.day == day)
+        .order_by(WorkSubtrack.start_time.asc(), WorkSubtrack.created_at.asc())
+        .all()
+    )
 
 
 def create_leave(db: Session, start_date: dt.date, end_date: dt.date, leave_type: str, comment: Optional[str], approved: bool) -> LeaveEntry:
@@ -201,12 +277,14 @@ def create_calendar_event(
     description: Optional[str],
     participated: bool,
 ) -> CalendarEvent:
-    if end_time <= start_time:
+    start_time_utc = _ensure_utc(start_time)
+    end_time_utc = _ensure_utc(end_time)
+    if end_time_utc <= start_time_utc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Event end must be after start")
     event = CalendarEvent(
         title=title,
-        start_time=start_time,
-        end_time=end_time,
+        start_time=start_time_utc,
+        end_time=end_time_utc,
         location=location,
         description=description,
         participated=participated,
@@ -224,9 +302,11 @@ def list_calendar_events(
 ) -> List[CalendarEvent]:
     query = db.query(CalendarEvent)
     if start_date:
-        query = query.filter(CalendarEvent.start_time >= dt.datetime.combine(start_date, dt.time.min))
+        start, _ = _day_bounds(start_date)
+        query = query.filter(CalendarEvent.start_time >= start)
     if end_date:
-        query = query.filter(CalendarEvent.start_time <= dt.datetime.combine(end_date, dt.time.max))
+        _, end = _day_bounds(end_date)
+        query = query.filter(CalendarEvent.start_time <= end)
     return query.order_by(CalendarEvent.start_time.asc()).all()
 
 
@@ -252,7 +332,16 @@ def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> 
         {
             k: normalized[k]
             for k in normalized
-            if k in {"block_ips", "caldav_url", "caldav_user", "caldav_password", "caldav_default_cal"}
+            if k
+            in {
+                "block_ips",
+                "caldav_url",
+                "caldav_user",
+                "caldav_password",
+                "caldav_default_cal",
+                "expected_daily_hours",
+                "expected_weekly_hours",
+            }
         },
     )
     return state.snapshot()
@@ -304,12 +393,14 @@ def export_sessions(db: Session, export_type: str, export_format: str, start_dat
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unsupported export format")
 
     if export_type == "timesheet":
+        start, _ = _day_bounds(start_date)
+        _, end = _day_bounds(end_date)
         sessions = (
             db.query(WorkSession)
             .filter(
                 and_(
-                    WorkSession.start_time >= dt.datetime.combine(start_date, dt.time.min),
-                    WorkSession.start_time <= dt.datetime.combine(end_date, dt.time.max),
+                    WorkSession.start_time >= start,
+                    WorkSession.start_time <= end,
                     WorkSession.status == "stopped",
                 )
             )

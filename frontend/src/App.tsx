@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
 import { API_BASE } from './config'
 import { getSessionsForDay, WorkSession } from './api'
-import { SessionControls } from './components/SessionControls'
 import { SessionList } from './components/SessionList'
 import { DaySummaryPanel } from './components/DaySummaryPanel'
 import { LeaveManager } from './components/LeaveManager'
@@ -10,11 +9,13 @@ import { ExportPanel } from './components/ExportPanel'
 import { ManualEntryForm } from './components/ManualEntryForm'
 import { CalendarPanel } from './components/CalendarPanel'
 import { SettingsPanel } from './components/SettingsPanel'
+import { MyDayPage } from './components/MyDayPage'
 
 export default function App() {
   const [activeSession, setActiveSession] = useState<WorkSession | null>(null)
   const [refreshKey, setRefreshKey] = useState(() => Date.now().toString())
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'leave' | 'calendar' | 'exports' | 'settings'>('dashboard')
+  const [activeTab, setActiveTab] = useState<'myday' | 'work' | 'leave' | 'calendar' | 'exports' | 'settings'>('myday')
+  const [workView, setWorkView] = useState<'log' | 'manual' | 'analysis'>('log')
   const triggerRefresh = useCallback(() => setRefreshKey(Date.now().toString()), [])
 
   useEffect(() => {
@@ -42,21 +43,47 @@ export default function App() {
 
   const content = useMemo(() => {
     switch (activeTab) {
-      case 'dashboard':
+      case 'myday':
+        return (
+          <MyDayPage
+            activeSession={activeSession}
+            onSessionUpdate={(session) => setActiveSession(session)}
+            refreshKey={refreshKey}
+            triggerRefresh={triggerRefresh}
+          />
+        )
+      case 'work':
         return (
           <div className="space-y-6">
-            <SessionControls
-              activeSession={activeSession}
-              onUpdate={(session) => {
-                setActiveSession(session)
-                triggerRefresh()
-              }}
-            />
-            <ManualEntryForm onCreated={triggerRefresh} />
-            <div className="grid gap-6 lg:grid-cols-2">
-              <SessionList refreshKey={refreshKey} />
-              <DaySummaryPanel refreshKey={refreshKey} />
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-100">Arbeitszeit</h2>
+                <p className="text-sm text-slate-400">Protokoll, Nachträge und Auswertungen.</p>
+              </div>
+              <div className="inline-flex overflow-hidden rounded-md border border-slate-800">
+                {(
+                  [
+                    { key: 'log', label: 'Protokoll' },
+                    { key: 'manual', label: 'Arbeitszeit nachtragen' },
+                    { key: 'analysis', label: 'Monat/Woche/Jahr' },
+                  ] as { key: typeof workView; label: string }[]
+                ).map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    onClick={() => setWorkView(option.key)}
+                    className={`px-3 py-1 text-xs font-medium transition-colors ${
+                      workView === option.key ? 'bg-primary text-slate-950' : 'bg-slate-950/60 text-slate-300 hover:bg-slate-800'
+                    }`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
             </div>
+            {workView === 'log' && <SessionList refreshKey={refreshKey} />}
+            {workView === 'manual' && <ManualEntryForm onCreated={triggerRefresh} />}
+            {workView === 'analysis' && <DaySummaryPanel refreshKey={refreshKey} />}
           </div>
         )
       case 'leave':
@@ -87,7 +114,8 @@ export default function App() {
         </div>
         <nav className="mx-auto mt-2 flex max-w-6xl flex-wrap gap-2 px-6 pb-4">
           {[
-            { key: 'dashboard', label: 'Arbeitszeit' },
+            { key: 'myday', label: 'Mein Tag' },
+            { key: 'work', label: 'Arbeitszeit' },
             { key: 'leave', label: 'Abwesenheiten' },
             { key: 'calendar', label: 'Kalender' },
             { key: 'exports', label: 'Exporte' },

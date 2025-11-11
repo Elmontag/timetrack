@@ -11,7 +11,9 @@ from app import models
 def test_start_pause_resume_stop_flow(client: TestClient):
     start_resp = client.post("/work/start", json={"project": "MVP", "tags": ["core"], "comment": "Kickoff"})
     assert start_resp.status_code == 201
-    session_id = start_resp.json()["id"]
+    data_start = start_resp.json()
+    session_id = data_start["id"]
+    assert data_start["start_time"].endswith("+00:00")
 
     pause_resp = client.post("/work/pause")
     assert pause_resp.status_code == 200
@@ -125,6 +127,27 @@ def test_manual_session_entry(client: TestClient):
     assert any(item["comment"] == "Nachtrag" for item in entries)
 
 
+def test_subtrack_creation(client: TestClient):
+    payload = {
+        "day": "2024-04-01",
+        "title": "Kundentermin",
+        "start_time": "2024-04-01T09:00:00",
+        "end_time": "2024-04-01T10:00:00",
+        "project": "ACME",
+        "tags": ["meeting", "kunde"],
+        "note": "Vorbereitung Sprint",
+    }
+    create_resp = client.post("/work/subtracks", json=payload)
+    assert create_resp.status_code == 201
+    subtrack = create_resp.json()
+    assert subtrack["title"] == "Kundentermin"
+
+    list_resp = client.get("/work/subtracks/2024-04-01")
+    assert list_resp.status_code == 200
+    items = list_resp.json()
+    assert any(item["title"] == "Kundentermin" for item in items)
+
+
 def test_calendar_event_participation(client: TestClient):
     create_resp = client.post(
         "/calendar/events",
@@ -155,15 +178,39 @@ def test_settings_update(client: TestClient, session: Session):
         "caldav_url": "https://cal.example.com",
         "caldav_user": "user",
         "caldav_default_cal": "Work",
+        "expected_daily_hours": 7.5,
+        "expected_weekly_hours": 37.5,
     }
     resp = client.put("/settings", json=update_payload)
     assert resp.status_code == 200
     data = resp.json()
     assert "192.168.0.0/24" in data["block_ips"]
     assert data["caldav_url"] == "https://cal.example.com"
+    assert data["expected_daily_hours"] == 7.5
+    assert data["expected_weekly_hours"] == 37.5
 
     stored = session.query(models.AppSetting).all()
     assert any(item.key == "caldav_url" for item in stored)
+
+
+def test_expected_hours_impact_summary(client: TestClient):
+    update_resp = client.put("/settings", json={"expected_daily_hours": 6})
+    assert update_resp.status_code == 200
+
+    payload = {
+        "start_time": "2024-05-01T08:00:00",
+        "end_time": "2024-05-01T12:00:00",
+        "project": "Analyse",
+        "tags": ["focus"],
+    }
+    create_resp = client.post("/work/manual", json=payload)
+    assert create_resp.status_code == 201
+
+    summary_resp = client.get("/days", params={"from_date": "2024-05-01", "to_date": "2024-05-01"})
+    assert summary_resp.status_code == 200
+    summary = summary_resp.json()[0]
+    assert summary["work_seconds"] == 4 * 3600
+    assert summary["overtime_seconds"] == -2 * 3600
 
 
 def test_token_reuse_records_event(client: TestClient, session: Session):

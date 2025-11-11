@@ -22,6 +22,8 @@ class RuntimeState:
         self.caldav_user: Optional[str] = base_settings.caldav_user
         self.caldav_password: Optional[str] = base_settings.caldav_password
         self.caldav_default_cal: Optional[str] = base_settings.caldav_default_cal
+        self.expected_daily_hours: Optional[float] = base_settings.expected_daily_hours
+        self.expected_weekly_hours: Optional[float] = base_settings.expected_weekly_hours
 
     @property
     def block_ips(self) -> List[str]:
@@ -41,6 +43,8 @@ class RuntimeState:
                 "caldav_user": self.caldav_user or "",
                 "caldav_default_cal": self.caldav_default_cal or "",
                 "caldav_password_set": bool(self.caldav_password),
+                "expected_daily_hours": self.expected_daily_hours,
+                "expected_weekly_hours": self.expected_weekly_hours,
             }
 
     def apply(self, updates: Dict[str, Any]) -> None:
@@ -61,6 +65,12 @@ class RuntimeState:
                     self.caldav_password = password or None
             if "caldav_default_cal" in updates:
                 self.caldav_default_cal = updates.get("caldav_default_cal") or None
+            if "expected_daily_hours" in updates:
+                value = updates.get("expected_daily_hours")
+                self.expected_daily_hours = float(value) if value not in (None, "") else None
+            if "expected_weekly_hours" in updates:
+                value = updates.get("expected_weekly_hours")
+                self.expected_weekly_hours = float(value) if value not in (None, "") else None
 
     def load_from_db(self, session: Session) -> None:
         records = session.query(AppSetting).all()
@@ -77,6 +87,10 @@ class RuntimeState:
                 "caldav_default_cal",
             }:
                 decoded[record.key] = record.value
+            elif record.key == "expected_daily_hours":
+                decoded["expected_daily_hours"] = float(record.value) if record.value else None
+            elif record.key == "expected_weekly_hours":
+                decoded["expected_weekly_hours"] = float(record.value) if record.value else None
         if decoded:
             self.apply(decoded)
 
@@ -88,6 +102,8 @@ class RuntimeState:
                 value = json.dumps([ip.strip() for ip in value if ip.strip()])
             if key == "caldav_password" and value == "__UNCHANGED__":
                 continue
+            if key in {"expected_daily_hours", "expected_weekly_hours"}:
+                value = "" if value in (None, "") else str(value)
             record = session.query(AppSetting).filter(AppSetting.key == key).one_or_none()
             if record:
                 record.value = value

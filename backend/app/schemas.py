@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import List, Optional
+from typing import Any, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_serializer
+
+
+def _serialize_datetime(value: dt.datetime) -> str:
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=dt.timezone.utc)
+    else:
+        value = value.astimezone(dt.timezone.utc)
+    return value.isoformat()
 
 
 class WorkSessionBase(BaseModel):
@@ -18,6 +26,23 @@ class WorkSessionBase(BaseModel):
     paused_duration: int
     total_seconds: Optional[int]
     last_pause_start: Optional[dt.datetime]
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "start_time": _serialize_datetime(self.start_time),
+            "stop_time": _serialize_datetime(self.stop_time) if self.stop_time else None,
+            "status": self.status,
+            "project": self.project,
+            "tags": self.tags,
+            "comment": self.comment,
+            "paused_duration": self.paused_duration,
+            "total_seconds": self.total_seconds,
+            "last_pause_start": _serialize_datetime(self.last_pause_start)
+            if self.last_pause_start
+            else None,
+        }
 
 
 
@@ -90,8 +115,19 @@ class ExportResponse(BaseModel):
     created_at: dt.datetime
     path: str
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "type": self.type,
+            "format": self.format,
+            "range_start": self.range_start,
+            "range_end": self.range_end,
+            "created_at": _serialize_datetime(self.created_at),
+            "path": self.path,
+        }
 
 
 class ActionTokenCreateRequest(BaseModel):
@@ -110,12 +146,30 @@ class ActionTokenResponse(BaseModel):
     remaining_uses: Optional[int]
     created_at: dt.datetime
 
-    class Config:
-        orm_mode = True
+    model_config = ConfigDict(from_attributes=True)
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "scope": self.scope,
+            "expires_at": _serialize_datetime(self.expires_at)
+            if self.expires_at
+            else None,
+            "single_use": self.single_use,
+            "remaining_uses": self.remaining_uses,
+            "created_at": _serialize_datetime(self.created_at),
+        }
 
 
 class ActionTokenCreatedResponse(ActionTokenResponse):
     token: str
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize_created(self) -> dict[str, Any]:
+        data = ActionTokenResponse._serialize(self)
+        data["token"] = self.token
+        return data
 
 
 class ActionTokenResult(BaseModel):
@@ -135,6 +189,18 @@ class CalendarEventResponse(BaseModel):
     description: Optional[str]
     participated: bool
 
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "title": self.title,
+            "start_time": _serialize_datetime(self.start_time),
+            "end_time": _serialize_datetime(self.end_time),
+            "location": self.location,
+            "description": self.description,
+            "participated": self.participated,
+        }
+
 
 class CalendarEventCreateRequest(BaseModel):
     title: str
@@ -149,6 +215,46 @@ class CalendarEventUpdateRequest(BaseModel):
     participated: bool
 
 
+class SubtrackResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    day: dt.date
+    title: str
+    start_time: Optional[dt.datetime]
+    end_time: Optional[dt.datetime]
+    project: Optional[str]
+    tags: List[str]
+    note: Optional[str]
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "day": self.day,
+            "title": self.title,
+            "start_time": _serialize_datetime(self.start_time)
+            if self.start_time
+            else None,
+            "end_time": _serialize_datetime(self.end_time)
+            if self.end_time
+            else None,
+            "project": self.project,
+            "tags": self.tags,
+            "note": self.note,
+        }
+
+
+class SubtrackCreateRequest(BaseModel):
+    day: dt.date
+    title: str
+    start_time: Optional[dt.datetime] = None
+    end_time: Optional[dt.datetime] = None
+    project: Optional[str] = None
+    tags: List[str] = Field(default_factory=list)
+    note: Optional[str] = None
+
+
 class SettingsResponse(BaseModel):
     environment: str
     timezone: str
@@ -159,6 +265,8 @@ class SettingsResponse(BaseModel):
     caldav_user: Optional[str]
     caldav_default_cal: Optional[str]
     caldav_password_set: bool
+    expected_daily_hours: Optional[float]
+    expected_weekly_hours: Optional[float]
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -167,3 +275,5 @@ class SettingsUpdateRequest(BaseModel):
     caldav_user: Optional[str] = None
     caldav_password: Optional[str] = None
     caldav_default_cal: Optional[str] = None
+    expected_daily_hours: Optional[float] = Field(default=None, ge=0)
+    expected_weekly_hours: Optional[float] = Field(default=None, ge=0)

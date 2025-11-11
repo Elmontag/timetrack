@@ -9,6 +9,8 @@ export function SettingsPanel() {
   const [caldavDefaultCal, setCaldavDefaultCal] = useState('')
   const [passwordUpdate, setPasswordUpdate] = useState(false)
   const [caldavPassword, setCaldavPassword] = useState('')
+  const [expectedDaily, setExpectedDaily] = useState('')
+  const [expectedWeekly, setExpectedWeekly] = useState('')
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState<'success' | 'error' | null>(null)
 
@@ -20,6 +22,8 @@ export function SettingsPanel() {
       setCaldavUrl(data.caldav_url ?? '')
       setCaldavUser(data.caldav_user ?? '')
       setCaldavDefaultCal(data.caldav_default_cal ?? '')
+      setExpectedDaily(data.expected_daily_hours?.toString() ?? '')
+      setExpectedWeekly(data.expected_weekly_hours?.toString() ?? '')
     }
     run()
   }, [])
@@ -39,12 +43,16 @@ export function SettingsPanel() {
         caldav_user: caldavUser || null,
         caldav_default_cal: caldavDefaultCal || null,
       }
+      payload.expected_daily_hours = expectedDaily.trim() ? parseFloat(expectedDaily) : null
+      payload.expected_weekly_hours = expectedWeekly.trim() ? parseFloat(expectedWeekly) : null
       if (passwordUpdate) {
         payload.caldav_password = caldavPassword || null
       }
       const updated = await updateSettings(payload)
       setSettings(updated)
       setBlockIps(updated.block_ips.join(', '))
+      setExpectedDaily(updated.expected_daily_hours?.toString() ?? '')
+      setExpectedWeekly(updated.expected_weekly_hours?.toString() ?? '')
       setFeedback('success')
       setPasswordUpdate(false)
       setCaldavPassword('')
@@ -69,6 +77,14 @@ export function SettingsPanel() {
           <dt className="font-medium text-slate-100">Zeitzone</dt>
           <dd>{settings.timezone}</dd>
         </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-sm text-slate-300">
+          <dt className="font-medium text-slate-100">Sollstunden pro Tag</dt>
+          <dd>{settings.expected_daily_hours ?? '–'} h</dd>
+        </div>
+        <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-sm text-slate-300">
+          <dt className="font-medium text-slate-100">Sollstunden pro Woche</dt>
+          <dd>{settings.expected_weekly_hours ?? '–'} h</dd>
+        </div>
       </dl>
       <form onSubmit={handleSubmit} className="mt-4 space-y-4">
         <div>
@@ -83,6 +99,32 @@ export function SettingsPanel() {
             />
           </label>
           <p className="mt-1 text-xs text-slate-500">Kommagetrennt, unterstützt IPs und CIDR-Bereiche. Alle anderen Adressen bleiben zugelassen.</p>
+        </div>
+        <div className="grid gap-3 md:grid-cols-2">
+          <label className="text-sm text-slate-300">
+            Sollstunden pro Tag
+            <input
+              type="number"
+              min="0"
+              step="0.25"
+              value={expectedDaily}
+              onChange={(event) => setExpectedDaily(event.target.value)}
+              placeholder="z. B. 8"
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </label>
+          <label className="text-sm text-slate-300">
+            Sollstunden pro Woche
+            <input
+              type="number"
+              min="0"
+              step="0.5"
+              value={expectedWeekly}
+              onChange={(event) => setExpectedWeekly(event.target.value)}
+              placeholder="z. B. 40"
+              className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+          </label>
         </div>
         <div className="grid gap-3 md:grid-cols-2">
           <label className="text-sm text-slate-300">

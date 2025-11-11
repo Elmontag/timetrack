@@ -14,7 +14,15 @@ from .models import ActionToken, TokenEvent
 
 
 def _now() -> dt.datetime:
-    return dt.datetime.utcnow()
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def _ensure_aware(value: Optional[dt.datetime]) -> Optional[dt.datetime]:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        return value.replace(tzinfo=dt.timezone.utc)
+    return value.astimezone(dt.timezone.utc)
 
 
 def generate_token_value() -> str:
@@ -60,11 +68,13 @@ def verify_token(db: Session, token_value: str) -> Optional[ActionToken]:
     if not token:
         return None
     now = _now()
-    if token.expires_at and token.expires_at < now:
+    expires_at = _ensure_aware(token.expires_at)
+    if expires_at and expires_at < now:
         _record_event(db, token, "expired", "Token expired")
         db.commit()
         return None
-    if token.single_use and token.last_used_at is not None:
+    last_used = _ensure_aware(token.last_used_at)
+    if token.single_use and last_used is not None:
         _record_event(db, token, "reused", "Single use token already consumed")
         db.commit()
         return None

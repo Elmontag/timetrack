@@ -62,6 +62,19 @@ export interface SettingsResponse {
   caldav_user: string | null
   caldav_default_cal: string | null
   caldav_password_set: boolean
+  expected_daily_hours: number | null
+  expected_weekly_hours: number | null
+}
+
+export interface Subtrack {
+  id: number
+  day: string
+  title: string
+  start_time: string | null
+  end_time: string | null
+  project: string | null
+  tags: string[]
+  note: string | null
 }
 
 dayjs.extend(duration)
@@ -126,6 +139,24 @@ export async function listCalendarEvents(params: { from_date?: string; to_date?:
   return response.data
 }
 
+export async function listSubtracks(day: string) {
+  const response = await client.get<Subtrack[]>(`/work/subtracks/${day}`)
+  return response.data
+}
+
+export async function createSubtrack(payload: {
+  day: string
+  title: string
+  start_time?: string
+  end_time?: string
+  project?: string
+  tags?: string[]
+  note?: string
+}) {
+  const response = await client.post<Subtrack>('/work/subtracks', payload)
+  return response.data
+}
+
 export async function createCalendarEvent(payload: {
   title: string
   start_time: string
@@ -148,7 +179,9 @@ export async function getSettings() {
   return response.data
 }
 
-export async function updateSettings(payload: Partial<SettingsResponse> & { caldav_password?: string | null }) {
+export async function updateSettings(
+  payload: Partial<SettingsResponse> & { caldav_password?: string | null }
+) {
   const response = await client.put<SettingsResponse>('/settings', payload)
   return response.data
 }

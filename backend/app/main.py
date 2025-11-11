@@ -25,6 +25,8 @@ from .schemas import (
     ExportResponse,
     LeaveCreateRequest,
     LeaveEntryResponse,
+    SubtrackCreateRequest,
+    SubtrackResponse,
     WorkSessionBase,
     WorkSessionCreateRequest,
     WorkSessionManualRequest,
@@ -35,11 +37,13 @@ from .schemas import (
 )
 from .services import (
     create_calendar_event,
+    create_subtrack,
     create_leave,
     create_manual_session,
     export_sessions,
     list_calendar_events,
     list_leaves,
+    list_subtracks,
     list_sessions_for_day,
     pause_or_resume_session,
     range_day_summaries,
@@ -91,14 +95,28 @@ def work_pause(db: Session = Depends(get_db)) -> WorkToggleResponse:
 
 
 @app.post("/work/stop", response_model=WorkSessionBase)
-def work_stop(payload: WorkStopRequest, db: Session = Depends(get_db)) -> WorkSessionBase:
-    session = stop_session(db, payload.comment)
+def work_stop(payload: WorkStopRequest, request: Request, db: Session = Depends(get_db)) -> WorkSessionBase:
+    state: RuntimeState = request.app.state.runtime_state
+    session = stop_session(db, state, payload.comment)
     return session
 
 
 @app.post("/work/manual", response_model=WorkSessionBase, status_code=status.HTTP_201_CREATED)
-def work_manual(payload: WorkSessionManualRequest, db: Session = Depends(get_db)) -> WorkSessionBase:
-    session = create_manual_session(db, payload.start_time, payload.end_time, payload.project, payload.tags, payload.comment)
+def work_manual(
+    payload: WorkSessionManualRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> WorkSessionBase:
+    state: RuntimeState = request.app.state.runtime_state
+    session = create_manual_session(
+        db,
+        state,
+        payload.start_time,
+        payload.end_time,
+        payload.project,
+        payload.tags,
+        payload.comment,
+    )
     return session
 
 
@@ -107,11 +125,43 @@ def work_day(day: dt.date, db: Session = Depends(get_db)) -> list[WorkSessionBas
     return list_sessions_for_day(db, day)
 
 
+@app.get("/work/subtracks/{day}", response_model=list[SubtrackResponse])
+def work_subtracks(day: dt.date, db: Session = Depends(get_db)) -> list[SubtrackResponse]:
+    return list_subtracks(db, day)
+
+
+@app.post("/work/subtracks", response_model=SubtrackResponse, status_code=status.HTTP_201_CREATED)
+def create_work_subtrack(
+    payload: SubtrackCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> SubtrackResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    subtrack = create_subtrack(
+        db,
+        state,
+        payload.day,
+        payload.title,
+        payload.start_time,
+        payload.end_time,
+        payload.project,
+        payload.tags,
+        payload.note,
+    )
+    return subtrack
+
+
 @app.get("/days", response_model=list[DaySummaryResponse])
-def day_range(from_date: dt.date, to_date: dt.date, db: Session = Depends(get_db)) -> list[DaySummaryResponse]:
+def day_range(
+    from_date: dt.date,
+    to_date: dt.date,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> list[DaySummaryResponse]:
     if to_date < from_date:
         raise HTTPException(status_code=400, detail="Invalid range")
-    return range_day_summaries(db, from_date, to_date)
+    state: RuntimeState = request.app.state.runtime_state
+    return range_day_summaries(db, from_date, to_date, state)
 
 
 @app.post("/leaves", response_model=LeaveEntryResponse, status_code=status.HTTP_201_CREATED)
@@ -203,6 +253,7 @@ def execute_token(token_value: str, request: Request, db: Session = Depends(get_
     if not token:
         raise HTTPException(status_code=404, detail="Token invalid")
     client_ip = request.client.host if request.client else None
+    state: RuntimeState = request.app.state.runtime_state
     if token.ip_bind and client_ip != token.ip_bind:
         consume_token(db, token, client_ip, "denied", "IP mismatch")
         raise HTTPException(status_code=403, detail="Token IP mismatch")
@@ -217,7 +268,7 @@ def execute_token(token_value: str, request: Request, db: Session = Depends(get_
         session = pause_or_resume_session(db)
         message = f"Session {getattr(session, '_last_action', 'paused')}"
     elif scope == "stop":
-        session = stop_session(db)
+        session = stop_session(db, state)
         message = "Session stopped"
     elif scope == "toggle":
         try:
@@ -248,6 +299,8 @@ def read_settings(request: Request) -> SettingsResponse:
         caldav_user=snapshot["caldav_user"] or None,
         caldav_default_cal=snapshot["caldav_default_cal"] or None,
         caldav_password_set=snapshot["caldav_password_set"],
+        expected_daily_hours=snapshot["expected_daily_hours"],
+        expected_weekly_hours=snapshot["expected_weekly_hours"],
     )
 
 
@@ -266,4 +319,6 @@ def write_settings(payload: SettingsUpdateRequest, request: Request, db: Session
         caldav_user=snapshot["caldav_user"] or None,
         caldav_default_cal=snapshot["caldav_default_cal"] or None,
         caldav_password_set=snapshot["caldav_password_set"],
+        expected_daily_hours=snapshot["expected_daily_hours"],
+        expected_weekly_hours=snapshot["expected_weekly_hours"],
     )
