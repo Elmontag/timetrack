@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     export_pdf_engine: str = os.getenv("TT_EXPORT_PDF_ENGINE", "reportlab")
     export_xlsx_engine: str = os.getenv("TT_EXPORT_XLSX_ENGINE", "openpyxl")
 
+    travel_dir: Path = Path(os.getenv("TT_TRAVEL_DIR", "./data/travel"))
+
     caldav_url: Optional[str] = os.getenv("TT_CALDAV_URL")
     caldav_user: Optional[str] = os.getenv("TT_CALDAV_USER")
     caldav_password: Optional[str] = os.getenv("TT_CALDAV_PASSWORD")
@@ -86,3 +88,4 @@ settings = Settings()
 settings.sqlite_path.parent.mkdir(parents=True, exist_ok=True)
 settings.export_dir.mkdir(parents=True, exist_ok=True)
 settings.json_dir.mkdir(parents=True, exist_ok=True)
+settings.travel_dir.mkdir(parents=True, exist_ok=True)

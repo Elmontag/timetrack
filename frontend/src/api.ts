@@ -59,7 +59,35 @@ export interface CalendarEvent {
   location: string | null
   description: string | null
   participated: boolean
+  status: string
+  ignored: boolean
   attendees: string[]
+}
+
+export interface TravelDocument {
+  id: number
+  trip_id: number
+  document_type: string
+  original_name: string
+  comment: string | null
+  signed: boolean
+  created_at: string
+  download_path: string
+}
+
+export interface TravelTrip {
+  id: number
+  title: string
+  start_date: string
+  end_date: string
+  destination: string | null
+  purpose: string | null
+  workflow_state: string
+  notes: string | null
+  created_at: string
+  updated_at: string
+  documents: TravelDocument[]
+  dataset_path: string
 }
 
 export interface SettingsResponse {
@@ -241,14 +269,18 @@ export async function createCalendarEvent(payload: {
   location?: string
   description?: string
   participated?: boolean
+  status?: string
   attendees?: string[]
 }) {
   const response = await client.post<CalendarEvent>('/calendar/events', payload)
   return response.data
 }
 
-export async function updateCalendarParticipation(eventId: number, participated: boolean) {
-  const response = await client.patch<CalendarEvent>(`/calendar/events/${eventId}`, { participated })
+export async function updateCalendarEvent(
+  eventId: number,
+  payload: { participated?: boolean; status?: string; ignored?: boolean },
+) {
+  const response = await client.patch<CalendarEvent>(`/calendar/events/${eventId}`, payload)
   return response.data
 }
 
@@ -286,4 +318,82 @@ export function formatDuration(seconds: number | null | undefined) {
   const hours = Math.floor(duration.asHours())
   const minutes = duration.minutes().toString().padStart(2, '0')
   return `${hours}:${minutes}`
+}
+
+export async function listTravels() {
+  const response = await client.get<TravelTrip[]>('/travels')
+  return response.data
+}
+
+export async function createTravel(payload: {
+  title: string
+  start_date: string
+  end_date: string
+  destination?: string | null
+  purpose?: string | null
+  workflow_state?: string | null
+  notes?: string | null
+}) {
+  const response = await client.post<TravelTrip>('/travels', payload)
+  return response.data
+}
+
+export async function updateTravel(
+  tripId: number,
+  payload: Partial<{
+    title: string
+    start_date: string
+    end_date: string
+    destination: string | null
+    purpose: string | null
+    workflow_state: string | null
+    notes: string | null
+  }>,
+) {
+  const response = await client.put<TravelTrip>(`/travels/${tripId}`, payload)
+  return response.data
+}
+
+export async function deleteTravel(tripId: number) {
+  await client.delete(`/travels/${tripId}`)
+}
+
+export async function uploadTravelDocument(
+  tripId: number,
+  payload: { document_type: string; comment?: string | null; file: File },
+) {
+  const formData = new FormData()
+  formData.append('document_type', payload.document_type)
+  if (payload.comment) {
+    formData.append('comment', payload.comment)
+  }
+  formData.append('file', payload.file)
+  const response = await client.post<TravelDocument>(`/travels/${tripId}/documents`, formData, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+  })
+  return response.data
+}
+
+export async function updateTravelDocument(
+  tripId: number,
+  documentId: number,
+  payload: { comment?: string | null; signed?: boolean },
+) {
+  const response = await client.patch<TravelDocument>(
+    `/travels/${tripId}/documents/${documentId}`,
+    payload,
+  )
+  return response.data
+}
+
+export async function deleteTravelDocument(tripId: number, documentId: number) {
+  await client.delete(`/travels/${tripId}/documents/${documentId}`)
+}
+
+export function travelDocumentDownloadUrl(tripId: number, documentId: number) {
+  return `${API_BASE}/travels/${tripId}/documents/${documentId}/download`
+}
+
+export function travelDatasetDownloadUrl(datasetPath: string) {
+  return `${API_BASE}${datasetPath}`
 }

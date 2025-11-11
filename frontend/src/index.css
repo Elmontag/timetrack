@@ -6,6 +6,87 @@
   color-scheme: dark;
 }
 
+[data-theme='light'] {
+  color-scheme: light;
+}
+
 body {
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+@layer base {
+  [data-theme='dark'] body {
+    @apply text-slate-100;
+  }
+
+  [data-theme='light'] body {
+    @apply bg-slate-100 text-slate-900;
+  }
+}
+
+@layer components {
+  [data-theme='light'] .text-slate-100 {
+    @apply text-slate-900;
+  }
+  [data-theme='light'] .text-slate-200 {
+    @apply text-slate-800;
+  }
+  [data-theme='light'] .text-slate-300 {
+    @apply text-slate-700;
+  }
+  [data-theme='light'] .text-slate-400 {
+    @apply text-slate-600;
+  }
+  [data-theme='light'] .text-slate-500 {
+    --tw-text-opacity: 1;
+    color: rgb(100 116 139 / var(--tw-text-opacity));
+  }
+  [data-theme='light'] .border-slate-800 {
+    @apply border-slate-200;
+  }
+  [data-theme='light'] .border-slate-700 {
+    @apply border-slate-300;
+  }
+  [data-theme='light'] .border-slate-600 {
+    @apply border-slate-300;
+  }
+  [data-theme='light'] .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+    border-color: rgba(226, 232, 240, 1);
+  }
+  [data-theme='light'] .bg-slate-950 {
+    background-color: rgba(255, 255, 255, 0.95) !important;
+  }
+  [data-theme='light'] .bg-slate-950\/85,
+  [data-theme='light'] .bg-slate-950\/80,
+  [data-theme='light'] .bg-slate-950\/60 {
+    background-color: rgba(255, 255, 255, 0.92) !important;
+  }
+  [data-theme='light'] .bg-slate-900\/80,
+  [data-theme='light'] .bg-slate-900\/70,
+  [data-theme='light'] .bg-slate-900\/60,
+  [data-theme='light'] .bg-slate-900\/50,
+  [data-theme='light'] .bg-slate-900\/40,
+  [data-theme='light'] .bg-slate-900\/20 {
+    background-color: rgba(255, 255, 255, 0.9) !important;
+  }
+  [data-theme='light'] .bg-slate-900\/10 {
+    background-color: rgba(255, 255, 255, 0.85) !important;
+  }
+  [data-theme='light'] .bg-slate-900 {
+    background-color: rgba(248, 250, 252, 0.96) !important;
+  }
+  [data-theme='light'] .bg-slate-950\/30 {
+    background-color: rgba(255, 255, 255, 0.88) !important;
+  }
+  [data-theme='light'] .shadow {
+    --tw-shadow-color: rgba(15, 23, 42, 0.1);
+  }
+  [data-theme='light'] .bg-gradient-to-br.from-slate-950.via-slate-900.to-slate-950 {
+    background-image: linear-gradient(
+      to bottom right,
+      rgba(248, 250, 252, 1),
+      rgba(255, 255, 255, 1),
+      rgba(248, 250, 252, 1)
+    );
+  }
 }

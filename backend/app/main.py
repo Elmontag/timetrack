@@ -4,7 +4,7 @@ import datetime as dt
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, HTTPException, Request, Response, status
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
@@ -31,6 +31,11 @@ from .schemas import (
     LeaveEntryResponse,
     SubtrackCreateRequest,
     SubtrackResponse,
+    TravelDocumentResponse,
+    TravelDocumentUpdateRequest,
+    TravelTripCreateRequest,
+    TravelTripResponse,
+    TravelTripUpdateRequest,
     WorkSessionBase,
     WorkSessionCreateRequest,
     WorkSessionManualRequest,
@@ -41,28 +46,37 @@ from .schemas import (
     SettingsUpdateRequest,
 )
 from .services import (
+    add_travel_document,
+    build_travel_dataset_archive,
     create_calendar_event,
     create_holiday,
     create_subtrack,
     create_leave,
-    delete_holiday,
-    fetch_caldav_calendars,
     create_manual_session,
+    create_travel_trip,
+    delete_holiday,
+    delete_session,
+    delete_travel_document,
+    delete_travel_trip,
     export_sessions,
+    fetch_caldav_calendars,
     import_holidays_from_ics,
     list_calendar_events,
     list_holidays,
     list_leaves,
-    list_subtracks,
     list_sessions_for_day,
+    list_subtracks,
+    list_travel_trips,
     pause_or_resume_session,
     range_day_summaries,
+    resolve_travel_document_path,
     set_calendar_participation,
     start_session,
     stop_session,
-    update_session,
     update_runtime_settings,
-    delete_session,
+    update_session,
+    update_travel_document,
+    update_travel_trip,
 )
 from .state import RuntimeState
 from .token_utils import consume_token, create_token, verify_token
@@ -260,6 +274,7 @@ def create_calendar_event_entry(payload: CalendarEventCreateRequest, db: Session
         payload.location,
         payload.description,
         payload.participated,
+        payload.status,
         payload.attendees,
     )
     return event
@@ -273,8 +288,108 @@ def update_calendar_event(
     db: Session = Depends(get_db),
 ) -> CalendarEventResponse:
     state: RuntimeState = request.app.state.runtime_state
-    event = set_calendar_participation(db, state, event_id, payload.participated)
+    event = set_calendar_participation(
+        db,
+        state,
+        event_id,
+        participated=payload.participated,
+        status_value=payload.status,
+        ignored=payload.ignored,
+    )
     return event
+
+
+@app.get("/travels", response_model=list[TravelTripResponse])
+def list_travels(db: Session = Depends(get_db)) -> list[TravelTripResponse]:
+    return list_travel_trips(db)
+
+
+@app.post("/travels", response_model=TravelTripResponse, status_code=status.HTTP_201_CREATED)
+def create_travel(payload: TravelTripCreateRequest, db: Session = Depends(get_db)) -> TravelTripResponse:
+    trip = create_travel_trip(
+        db,
+        payload.title,
+        payload.start_date,
+        payload.end_date,
+        payload.destination,
+        payload.purpose,
+        payload.workflow_state,
+        payload.notes,
+    )
+    return trip
+
+
+@app.put("/travels/{trip_id}", response_model=TravelTripResponse)
+def update_travel(
+    trip_id: int,
+    payload: TravelTripUpdateRequest,
+    db: Session = Depends(get_db),
+) -> TravelTripResponse:
+    changes = payload.model_dump(exclude_unset=True)
+    trip = update_travel_trip(db, trip_id, **changes)
+    return trip
+
+
+@app.delete("/travels/{trip_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_travel(trip_id: int, db: Session = Depends(get_db)) -> Response:
+    delete_travel_trip(db, trip_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post(
+    "/travels/{trip_id}/documents",
+    response_model=TravelDocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upload_travel_document(
+    trip_id: int,
+    document_type: str = Form(...),
+    comment: Optional[str] = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+) -> TravelDocumentResponse:
+    content = await file.read()
+    normalized_comment = comment.strip() if comment and comment.strip() else None
+    document = add_travel_document(db, trip_id, document_type, file.filename or "upload", content, normalized_comment)
+    return document
+
+
+@app.patch(
+    "/travels/{trip_id}/documents/{document_id}",
+    response_model=TravelDocumentResponse,
+)
+def modify_travel_document(
+    trip_id: int,
+    document_id: int,
+    payload: TravelDocumentUpdateRequest,
+    db: Session = Depends(get_db),
+) -> TravelDocumentResponse:
+    updates = payload.model_dump(exclude_unset=True)
+    document = update_travel_document(db, trip_id, document_id, **updates)
+    return document
+
+
+@app.delete("/travels/{trip_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_travel_document(trip_id: int, document_id: int, db: Session = Depends(get_db)) -> Response:
+    delete_travel_document(db, trip_id, document_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.get("/travels/{trip_id}/documents/{document_id}/download")
+def download_travel_document(
+    trip_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> Response:
+    document, path = resolve_travel_document_path(db, trip_id, document_id)
+    return FileResponse(path, filename=document.original_name)
+
+
+@app.get("/travels/{trip_id}/reisekostenpaket")
+def download_travel_dataset(trip_id: int, db: Session = Depends(get_db)) -> Response:
+    filename, content = build_travel_dataset_archive(db, trip_id)
+    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
+    return Response(content, media_type="application/zip", headers=headers)
 
 
 @app.post("/exports", response_model=ExportResponse, status_code=status.HTTP_201_CREATED)
