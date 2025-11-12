@@ -47,6 +47,7 @@ class WorkSessionBase(BaseModel):
     total_seconds: Optional[int]
     last_pause_start: Optional[dt.datetime]
     notes: List[SessionNoteResponse] = Field(default_factory=list)
+    subtracks: List["SubtrackResponse"] = Field(default_factory=list)
 
     @model_serializer(mode="plain", when_used="json")
     def _serialize(self) -> dict[str, Any]:
@@ -64,6 +65,7 @@ class WorkSessionBase(BaseModel):
             if self.last_pause_start
             else None,
             "notes": [note._serialize() for note in self.notes],
+            "subtracks": [subtrack._serialize() for subtrack in self.subtracks],
         }
 
 
@@ -282,6 +284,7 @@ class SubtrackResponse(BaseModel):
     id: int
     day: dt.date
     title: str
+    session_id: Optional[int]
     start_time: Optional[dt.datetime]
     end_time: Optional[dt.datetime]
     project: Optional[str]
@@ -294,6 +297,7 @@ class SubtrackResponse(BaseModel):
             "id": self.id,
             "day": self.day,
             "title": self.title,
+            "session_id": self.session_id,
             "start_time": _serialize_datetime(self.start_time)
             if self.start_time
             else None,
@@ -309,6 +313,7 @@ class SubtrackResponse(BaseModel):
 class SubtrackCreateRequest(BaseModel):
     day: dt.date
     title: str
+    session_id: Optional[int] = None
     start_time: Optional[dt.datetime] = None
     end_time: Optional[dt.datetime] = None
     project: Optional[str] = None
@@ -319,6 +324,7 @@ class SubtrackCreateRequest(BaseModel):
 class SubtrackUpdateRequest(BaseModel):
     day: Optional[dt.date] = None
     title: Optional[str] = None
+    session_id: Optional[int] = None
     start_time: Optional[dt.datetime] = None
     end_time: Optional[dt.datetime] = None
     project: Optional[str] = None

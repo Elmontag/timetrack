@@ -251,6 +251,7 @@ def create_work_subtrack(
         payload.project,
         payload.tags,
         payload.note,
+        payload.session_id,
     )
     return subtrack
 

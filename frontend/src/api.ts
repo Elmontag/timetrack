@@ -23,6 +23,7 @@ export interface WorkSession {
   total_seconds: number | null
   last_pause_start: string | null
   notes: SessionNote[]
+  subtracks: Subtrack[]
 }
 
 export interface DaySummary {
@@ -178,6 +179,7 @@ export interface Subtrack {
   id: number
   day: string
   title: string
+  session_id: number | null
   start_time: string | null
   end_time: string | null
   project: string | null
@@ -303,6 +305,7 @@ export async function listSubtracks(day: string) {
 export async function createSubtrack(payload: {
   day: string
   title: string
+  session_id: number
   start_time?: string
   end_time?: string
   project?: string
@@ -318,6 +321,7 @@ export async function updateSubtrack(
   payload: {
     day?: string | null
     title?: string | null
+    session_id?: number | null
     start_time?: string | null
     end_time?: string | null
     project?: string | null

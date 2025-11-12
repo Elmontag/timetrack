@@ -15,7 +15,6 @@ import {
   stopSession,
   WorkSession,
 } from './api'
-import { SessionList } from './components/SessionList'
 import { DaySummaryPanel } from './components/DaySummaryPanel'
 import { LeaveManager } from './components/LeaveManager'
 import { ExportPanel } from './components/ExportPanel'
@@ -35,7 +34,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<
     'myday' | 'work' | 'leave' | 'calendar' | 'travel' | 'exports' | 'settings'
   >('myday')
-  const [workView, setWorkView] = useState<'log' | 'manual' | 'analysis'>('log')
+  const [workView, setWorkView] = useState<'manual' | 'analysis'>('manual')
   const [startPlan, setStartPlan] = useState(() => ({
     startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
     comment: '',
@@ -262,19 +261,25 @@ export default function App() {
   const content = useMemo(() => {
     switch (activeTab) {
       case 'myday':
-        return <MyDayPage refreshKey={refreshKey} />
+        return (
+          <MyDayPage
+            refreshKey={refreshKey}
+            activeSession={activeSession}
+            onRefresh={triggerRefresh}
+            timeDisplayFormat={timeDisplayFormat}
+          />
+        )
       case 'work':
         return (
           <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
                 <h2 className="text-lg font-semibold text-slate-100">Arbeitszeit</h2>
-                <p className="text-sm text-slate-400">Protokoll, Nachträge und Auswertungen.</p>
+                <p className="text-sm text-slate-400">Nachträge und Auswertungen.</p>
               </div>
               <div className="inline-flex overflow-hidden rounded-md border border-slate-800">
                 {(
                   [
-                    { key: 'log', label: 'Protokoll' },
                     { key: 'manual', label: 'Arbeitszeit nachtragen' },
                     { key: 'analysis', label: 'Monat/Woche/Jahr' },
                   ] as { key: typeof workView; label: string }[]
@@ -292,9 +297,6 @@ export default function App() {
                 ))}
               </div>
             </div>
-            {workView === 'log' && (
-              <SessionList refreshKey={refreshKey} timeDisplayFormat={timeDisplayFormat} />
-            )}
             {workView === 'manual' && <ManualEntryForm onCreated={triggerRefresh} />}
             {workView === 'analysis' && (
               <DaySummaryPanel refreshKey={refreshKey} timeDisplayFormat={timeDisplayFormat} />

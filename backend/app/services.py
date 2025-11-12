@@ -55,8 +55,6 @@ UTC = dt.timezone.utc
 LOCAL_TZ = ZoneInfo(settings.timezone)
 
 
-AUTO_SESSION_COMMENT_PREFIX = "Automatisch aus Termin: "
-
 CALENDAR_EVENT_STATUSES: Set[str] = {"pending", "attended", "absent", "cancelled"}
 
 SESSION_NOTE_TYPES: Set[str] = {"start", "runtime"}
@@ -605,6 +603,7 @@ def pause_or_resume_session(db: Session) -> WorkSession:
         action = "resumed"
     else:
         session.mark_paused(now)
+        _close_open_subtracks(db, session, now)
         action = "paused"
     db.add(session)
     db.commit()
@@ -621,6 +620,7 @@ def stop_session(db: Session, state: RuntimeState, comment: Optional[str] = None
     if comment:
         session.comment = comment
     session.mark_stopped(now)
+    _close_open_subtracks(db, session, now)
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -671,6 +671,7 @@ def create_manual_session(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="End time must be after start time")
     start_time_utc = _ensure_utc(start_time)
     end_time_utc = _ensure_utc(end_time)
+    _assert_no_session_overlap(db, start_time_utc, end_time_utc)
     duration = end_time_utc - start_time_utc
     total_seconds = int(duration.total_seconds())
     session = WorkSession(
@@ -690,106 +691,43 @@ def create_manual_session(
     return session
 
 
-def _auto_session_comment(title: str, note: Optional[str] = None) -> str:
-    base = f"{AUTO_SESSION_COMMENT_PREFIX}{title}"
-    if note:
-        return f"{base} – {note}"
-    return base
-
-
-def _ensure_session_for_span(
-    db: Session,
-    state: RuntimeState,
-    start_time: Optional[dt.datetime],
-    end_time: Optional[dt.datetime],
-    title: str,
-    project: Optional[str],
-    tags: List[str],
-    note: Optional[str],
-) -> Optional[WorkSession]:
-    if start_time is None or end_time is None:
-        return None
-    start_utc = _ensure_utc(start_time)
-    end_utc = _ensure_utc(end_time)
-    existing = (
-        db.query(WorkSession)
-        .filter(
-            WorkSession.start_time == start_utc,
-            WorkSession.stop_time == end_utc,
+def _assert_no_session_overlap(
+    db: Session, start_time: dt.datetime, end_time: dt.datetime, exclude_session_id: Optional[int] = None
+) -> None:
+    query = db.query(WorkSession).filter(
+        WorkSession.start_time < end_time,
+        or_(WorkSession.stop_time.is_(None), WorkSession.stop_time > start_time),
+    )
+    if exclude_session_id is not None:
+        query = query.filter(WorkSession.id != exclude_session_id)
+    conflict = query.first()
+    if conflict:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Session overlaps with existing track",
         )
-        .one_or_none()
-    )
-    desired_comment = _auto_session_comment(title, note)
-    if existing:
-        if (existing.comment or "").startswith(AUTO_SESSION_COMMENT_PREFIX) and existing.comment != desired_comment:
-            existing.comment = desired_comment
-            db.add(existing)
-        return existing
-    return create_manual_session(
-        db,
-        state,
-        start_utc,
-        end_utc,
-        project,
-        tags or [],
-        desired_comment,
-    )
 
 
-def _ensure_session_for_subtrack(
-    db: Session,
-    state: RuntimeState,
-    subtrack: WorkSubtrack,
-    source_title: Optional[str] = None,
-) -> Optional[WorkSession]:
-    title = source_title or subtrack.title
-    return _ensure_session_for_span(
-        db,
-        state,
-        _from_db_datetime(subtrack.start_time),
-        _from_db_datetime(subtrack.end_time),
-        title,
-        subtrack.project,
-        list(subtrack.tags or []),
-        subtrack.note,
+def _close_open_subtracks(db: Session, session: WorkSession, when: dt.datetime) -> None:
+    normalized = _ensure_utc(when)
+    open_subtracks = (
+        db.query(WorkSubtrack)
+        .filter(WorkSubtrack.session_id == session.id, WorkSubtrack.end_time.is_(None))
+        .all()
     )
-
-
-def _remove_auto_session(
-    db: Session,
-    state: RuntimeState,
-    start_time: Optional[dt.datetime],
-    end_time: Optional[dt.datetime],
-    title: str,
-    note: Optional[str],
-) -> Optional[dt.date]:
-    start_utc = _from_db_datetime(start_time)
-    end_utc = _from_db_datetime(end_time)
-    if start_utc is None or end_utc is None:
-        return None
-    auto_comment = _auto_session_comment(title, note)
-    session = (
-        db.query(WorkSession)
-        .filter(
-            WorkSession.start_time == start_utc,
-            WorkSession.stop_time == end_utc,
-            WorkSession.comment == auto_comment,
-        )
-        .one_or_none()
-    )
-    if session is None:
-        return None
-    day = start_utc.astimezone(LOCAL_TZ).date()
-    db.delete(session)
-    update_day_summary(db, day, state)
-    return day
+    for subtrack in open_subtracks:
+        subtrack.end_time = normalized
+        db.add(subtrack)
 
 
 def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
     start, end = _day_bounds(day)
     sessions = (
         db.query(WorkSession)
-        .options(selectinload(WorkSession.notes))
+        .options(
+            selectinload(WorkSession.notes),
+            selectinload(WorkSession.subtracks),
+        )
         .filter(and_(WorkSession.start_time >= start, WorkSession.start_time < end))
         .order_by(WorkSession.start_time.asc())
         .all()
@@ -972,6 +910,9 @@ def update_session(
 
     start_utc = _from_db_datetime(session.start_time)
     stop_utc = _from_db_datetime(session.stop_time)
+    if start_utc is None or stop_utc is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Start and stop time required")
+    _assert_no_session_overlap(db, start_utc, stop_utc, exclude_session_id=session.id)
     duration = stop_utc - start_utc
     session.total_seconds = max(int(duration.total_seconds()) - (session.paused_duration or 0), 0)
     session.last_pause_start = None
@@ -1013,14 +954,57 @@ def create_subtrack(
     project: Optional[str],
     tags: List[str],
     note: Optional[str],
+    session_id: Optional[int],
 ) -> WorkSubtrack:
+    tags = list(tags or [])
     start_time_utc = _ensure_utc(start_time) if start_time else None
     end_time_utc = _ensure_utc(end_time) if end_time else None
     if start_time_utc and end_time_utc and end_time_utc <= start_time_utc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subtrack end must be after start")
+
+    session: Optional[WorkSession] = None
+    if session_id is not None:
+        session = db.get(WorkSession, session_id)
+        if not session:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+        session_start = _from_db_datetime(session.start_time)
+        session_end = _from_db_datetime(session.stop_time)
+        if session_start is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Session start missing")
+        if start_time_utc is None:
+            start_time_utc = session_start
+        if start_time_utc < session_start:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Subtrack start must not be before session start",
+            )
+        if end_time_utc and session_end and end_time_utc > session_end:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Subtrack end must not be after session end",
+            )
+        existing_active = (
+            db.query(WorkSubtrack)
+            .filter(WorkSubtrack.session_id == session.id, WorkSubtrack.end_time.is_(None))
+            .first()
+        )
+        if existing_active and end_time_utc is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Session already has an active subtrack",
+            )
+        day = session_start.astimezone(LOCAL_TZ).date()
+    else:
+        if start_time_utc is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Start time required when no session is linked",
+            )
+
     subtrack = WorkSubtrack(
         day=day,
         title=title,
+        session=session,
         start_time=start_time_utc,
         end_time=end_time_utc,
         project=project,
@@ -1030,8 +1014,6 @@ def create_subtrack(
     db.add(subtrack)
     db.commit()
     db.refresh(subtrack)
-    _ensure_session_for_subtrack(db, state, subtrack)
-    update_day_summary(db, day, state)
     return subtrack
 
 
@@ -1055,34 +1037,84 @@ def update_subtrack(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subtrack not found")
 
     original_day = subtrack.day
-    _remove_auto_session(db, state, subtrack.start_time, subtrack.end_time, subtrack.title, subtrack.note)
+    target_session = subtrack.session
 
-    if "day" in changes and changes["day"] is not None:
-        subtrack.day = changes["day"]
+    if "session_id" in changes:
+        new_session_id = changes["session_id"]
+        if new_session_id is None:
+            target_session = None
+        else:
+            target_session = db.get(WorkSession, new_session_id)
+            if not target_session:
+                raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
     if "title" in changes and changes["title"] is not None:
         subtrack.title = changes["title"]
+    if "project" in changes:
+        subtrack.project = changes["project"]
+    if "tags" in changes and changes["tags"] is not None:
+        subtrack.tags = list(changes["tags"] or [])
+    if "note" in changes:
+        subtrack.note = changes["note"]
+    if "day" in changes and changes["day"] is not None:
+        subtrack.day = changes["day"]
+
     if "start_time" in changes:
         value = changes["start_time"]
         subtrack.start_time = _ensure_utc(value) if value else None
     if "end_time" in changes:
         value = changes["end_time"]
         subtrack.end_time = _ensure_utc(value) if value else None
-    if "project" in changes:
-        subtrack.project = changes["project"]
-    if "tags" in changes and changes["tags"] is not None:
-        subtrack.tags = changes["tags"]
-    if "note" in changes:
-        subtrack.note = changes["note"]
+
+    if subtrack.start_time and subtrack.end_time and subtrack.end_time <= subtrack.start_time:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subtrack end must be after start")
+
+    if target_session is not None:
+        session_start = _from_db_datetime(target_session.start_time)
+        session_end = _from_db_datetime(target_session.stop_time)
+        if session_start is None:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Session start missing")
+        if subtrack.start_time is None:
+            subtrack.start_time = session_start
+        if subtrack.start_time < session_start:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Subtrack start must not be before session start",
+            )
+        if subtrack.end_time and session_end and subtrack.end_time > session_end:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Subtrack end must not be after session end",
+            )
+        open_subtrack = (
+            db.query(WorkSubtrack)
+            .filter(
+                WorkSubtrack.session_id == target_session.id,
+                WorkSubtrack.id != subtrack.id,
+                WorkSubtrack.end_time.is_(None),
+            )
+            .first()
+        )
+        if open_subtrack and subtrack.end_time is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Session already has an active subtrack",
+            )
+        subtrack.session = target_session
+        subtrack.day = session_start.astimezone(LOCAL_TZ).date()
+    else:
+        if subtrack.start_time is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Start time required when no session is linked",
+            )
+        subtrack.session = None
 
     db.add(subtrack)
     db.commit()
     db.refresh(subtrack)
 
-    _ensure_session_for_subtrack(db, state, subtrack)
-
-    affected_days: Set[dt.date] = {original_day, subtrack.day}
-    for day in affected_days:
-        update_day_summary(db, day, state)
+    if original_day != subtrack.day:
+        update_day_summary(db, original_day, state)
     return subtrack
 
 
@@ -1091,13 +1123,8 @@ def delete_subtrack(db: Session, state: RuntimeState, subtrack_id: int) -> None:
     if not subtrack:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subtrack not found")
 
-    day = subtrack.day
-    _remove_auto_session(db, state, subtrack.start_time, subtrack.end_time, subtrack.title, subtrack.note)
-
     db.delete(subtrack)
     db.commit()
-
-    update_day_summary(db, day, state)
 
 
 def create_leave(
@@ -1361,8 +1388,6 @@ def set_calendar_participation(
         and event.participated == target_participated
         and event.ignored == target_ignored
     ):
-        if target_participated and event.subtrack is not None:
-            _ensure_session_for_subtrack(db, state, event.subtrack, event.title)
         return event
 
     event.status = target_status
@@ -1390,26 +1415,10 @@ def set_calendar_participation(
             subtrack.start_time = event.start_time
             subtrack.end_time = event.end_time
             subtrack.note = event.description
-        _ensure_session_for_subtrack(db, state, subtrack, event.title)
     else:
         subtrack = event.subtrack
         if subtrack is not None:
-            day = subtrack.day
-            auto_comment = _auto_session_comment(event.title, subtrack.note)
-            session = (
-                db.query(WorkSession)
-                .filter(
-                    WorkSession.start_time == event.start_time,
-                    WorkSession.stop_time == event.end_time,
-                    WorkSession.comment == auto_comment,
-                )
-                .one_or_none()
-            )
             db.delete(subtrack)
-            if session is not None:
-                db.delete(session)
-                if day:
-                    update_day_summary(db, day, state)
 
     db.add(event)
     db.commit()

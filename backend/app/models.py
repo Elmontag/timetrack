@@ -41,6 +41,12 @@ class WorkSession(Base):
         cascade="all, delete-orphan",
         order_by="WorkSessionNote.created_at, WorkSessionNote.id",
     )
+    subtracks = relationship(
+        "WorkSubtrack",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="WorkSubtrack.start_time, WorkSubtrack.id",
+    )
 
     def mark_paused(self, now: dt.datetime) -> None:
         if self.status == "paused":
@@ -226,6 +232,7 @@ class WorkSubtrack(Base):
     id = Column(Integer, primary_key=True)
     day = Column(Date, nullable=False, index=True)
     title = Column(String(200), nullable=False)
+    session_id = Column(Integer, ForeignKey("work_sessions.id"), nullable=True, index=True)
     start_time = Column(DateTime(timezone=True), nullable=True)
     end_time = Column(DateTime(timezone=True), nullable=True)
     project = Column(String(100), nullable=True)
@@ -235,6 +242,7 @@ class WorkSubtrack(Base):
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     calendar_event = relationship("CalendarEvent", back_populates="subtrack")
+    session = relationship("WorkSession", back_populates="subtracks")
 
 
 class AppSetting(Base):
