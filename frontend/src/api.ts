@@ -1,6 +1,4 @@
 import axios from 'axios'
-import dayjs from 'dayjs'
-import duration from 'dayjs/plugin/duration'
 import { API_BASE } from './config'
 
 export type SessionNoteType = 'start' | 'runtime'
@@ -130,6 +128,8 @@ export interface TravelLetterTemplate {
   body: string
 }
 
+export type TimeDisplayFormat = 'hh:mm' | 'decimal'
+
 export interface SettingsResponse {
   environment: string
   timezone: string
@@ -146,6 +146,7 @@ export interface SettingsResponse {
   vacation_days_per_year: number
   vacation_days_carryover: number
   day_overview_refresh_seconds: number
+  time_display_format: TimeDisplayFormat
   travel_sender_contact: TravelContact
   travel_hr_contact: TravelContact
   travel_letter_template: TravelLetterTemplate
@@ -183,8 +184,6 @@ export interface Subtrack {
   tags: string[]
   note: string | null
 }
-
-dayjs.extend(duration)
 
 const client = axios.create({
   baseURL: API_BASE,
@@ -382,14 +381,6 @@ export async function createActionToken(payload: {
 export async function getCaldavCalendars() {
   const response = await client.get<CalDavCalendar[]>('/caldav/calendars')
   return response.data
-}
-
-export function formatDuration(seconds: number | null | undefined) {
-  if (!seconds) return '0:00'
-  const duration = dayjs.duration(seconds, 'seconds')
-  const hours = Math.floor(duration.asHours())
-  const minutes = duration.minutes().toString().padStart(2, '0')
-  return `${hours}:${minutes}`
 }
 
 export async function listTravels() {

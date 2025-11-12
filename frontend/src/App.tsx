@@ -5,6 +5,7 @@ import { API_BASE } from './config'
 import {
   DaySummary,
   SettingsResponse,
+  TimeDisplayFormat,
   getDaySummaries,
   getSessionsForDay,
   getSettings,
@@ -62,6 +63,7 @@ export default function App() {
     }
     return 1
   })
+  const [timeDisplayFormat, setTimeDisplayFormat] = useState<TimeDisplayFormat>('hh:mm')
 
   const triggerRefresh = useCallback(() => setRefreshKey(Date.now().toString()), [])
   const { run: runStart, loading: starting } = useAsync(startSession)
@@ -85,6 +87,9 @@ export default function App() {
         if (data.day_overview_refresh_seconds > 0) {
           setDayOverviewRefreshSeconds(data.day_overview_refresh_seconds)
         }
+        if (data.time_display_format) {
+          setTimeDisplayFormat(data.time_display_format)
+        }
       } catch (error) {
         console.error('Einstellungen konnten nicht geladen werden', error)
       }
@@ -107,6 +112,10 @@ export default function App() {
       const value = custom.detail?.day_overview_refresh_seconds
       if (typeof value === 'number' && value > 0) {
         setDayOverviewRefreshSeconds(value)
+      }
+      const format = custom.detail?.time_display_format
+      if (format === 'hh:mm' || format === 'decimal') {
+        setTimeDisplayFormat(format)
       }
     }
     window.addEventListener('tt-settings-updated', handler as EventListener)
@@ -280,9 +289,13 @@ export default function App() {
                 ))}
               </div>
             </div>
-            {workView === 'log' && <SessionList refreshKey={refreshKey} />}
+            {workView === 'log' && (
+              <SessionList refreshKey={refreshKey} timeDisplayFormat={timeDisplayFormat} />
+            )}
             {workView === 'manual' && <ManualEntryForm onCreated={triggerRefresh} />}
-            {workView === 'analysis' && <DaySummaryPanel refreshKey={refreshKey} />}
+            {workView === 'analysis' && (
+              <DaySummaryPanel refreshKey={refreshKey} timeDisplayFormat={timeDisplayFormat} />
+            )}
           </div>
         )
       case 'leave':
@@ -298,7 +311,7 @@ export default function App() {
       default:
         return null
     }
-  }, [activeTab, refreshKey, triggerRefresh, workView])
+  }, [activeTab, refreshKey, timeDisplayFormat, triggerRefresh, workView])
 
   return (
     <div
@@ -336,6 +349,7 @@ export default function App() {
             summary={daySummary}
             refreshIntervalSeconds={dayOverviewRefreshSeconds}
             onRuntimeNoteCreate={handleRuntimeNote}
+            timeDisplayFormat={timeDisplayFormat}
           />
           <nav className="flex flex-wrap gap-2">
             {[

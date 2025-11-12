@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import dayjs from 'dayjs'
-import { deleteSession, getSessionsForDay, updateSession, WorkSession, formatDuration } from '../api'
+import { deleteSession, getSessionsForDay, updateSession, WorkSession, TimeDisplayFormat } from '../api'
+import { formatSeconds } from '../utils/timeFormat'
 
 interface Props {
   refreshKey: string
+  timeDisplayFormat: TimeDisplayFormat
 }
 
 interface EditFormState {
@@ -15,7 +17,7 @@ interface EditFormState {
   tags: string
 }
 
-export function SessionList({ refreshKey }: Props) {
+export function SessionList({ refreshKey, timeDisplayFormat }: Props) {
   const [sessions, setSessions] = useState<WorkSession[]>([])
   const [day, setDay] = useState(dayjs().format('YYYY-MM-DD'))
   const [loading, setLoading] = useState(false)
@@ -248,7 +250,9 @@ export function SessionList({ refreshKey }: Props) {
                       {dayjs(session.start_time).format('HH:mm')} –{' '}
                       {session.stop_time ? dayjs(session.stop_time).format('HH:mm') : 'laufend'}
                     </span>
-                    <span className="font-mono text-slate-100">{formatDuration(session.total_seconds)}</span>
+                    <span className="font-mono text-slate-100">
+                      {formatSessionDuration(session.total_seconds)}
+                    </span>
                   </div>
                   {session.comment && <p className="text-sm text-slate-400">{session.comment}</p>}
                   <div className="flex flex-wrap gap-2">
@@ -316,3 +320,12 @@ export function SessionList({ refreshKey }: Props) {
     </div>
   )
 }
+  const formatSessionDuration = useCallback(
+    (seconds: number | null | undefined) =>
+      formatSeconds(seconds ?? 0, timeDisplayFormat, {
+        decimalPlaces: timeDisplayFormat === 'decimal' ? 2 : undefined,
+        includeUnit: timeDisplayFormat === 'decimal',
+      }),
+    [timeDisplayFormat],
+  )
+

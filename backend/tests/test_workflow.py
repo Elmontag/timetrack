@@ -424,6 +424,7 @@ def test_settings_update(client: TestClient, session: Session):
         "expected_daily_hours": 7.5,
         "expected_weekly_hours": 37.5,
         "day_overview_refresh_seconds": 5,
+        "time_display_format": "decimal",
     }
     resp = client.put("/settings", json=update_payload)
     assert resp.status_code == 200
@@ -434,10 +435,12 @@ def test_settings_update(client: TestClient, session: Session):
     assert data["expected_daily_hours"] == 7.5
     assert data["expected_weekly_hours"] == 37.5
     assert data["day_overview_refresh_seconds"] == 5
+    assert data["time_display_format"] == "decimal"
 
     stored = session.query(models.AppSetting).all()
     assert any(item.key == "caldav_url" for item in stored)
     assert any(item.key == "day_overview_refresh_seconds" for item in stored)
+    assert any(item.key == "time_display_format" and item.value == "decimal" for item in stored)
 
 
 def test_expected_hours_impact_summary(client: TestClient):

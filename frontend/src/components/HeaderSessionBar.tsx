@@ -1,9 +1,10 @@
 import { PauseIcon, PlayIcon, StopIcon } from '@heroicons/react/24/outline'
 import dayjs from 'dayjs'
 import { useMemo, useState } from 'react'
-import { DaySummary, WorkSession } from '../api'
+import { DaySummary, TimeDisplayFormat, WorkSession } from '../api'
 import { useSessionRuntime } from '../hooks/useSessionRuntime'
 import { Modal } from './Modal'
+import { formatSeconds } from '../utils/timeFormat'
 
 interface Props {
   activeSession: WorkSession | null
@@ -25,6 +26,7 @@ interface Props {
   summary: DaySummary | null
   refreshIntervalSeconds?: number
   onRuntimeNoteCreate: (content: string, createdAt: string) => Promise<void>
+  timeDisplayFormat: TimeDisplayFormat
 }
 
 export function HeaderSessionBar({
@@ -39,6 +41,7 @@ export function HeaderSessionBar({
   summary,
   refreshIntervalSeconds = 1,
   onRuntimeNoteCreate,
+  timeDisplayFormat,
 }: Props) {
   const refreshMs = Math.max(1, refreshIntervalSeconds) * 1000
   const { runtime, status, workedSeconds, pausedSeconds } = useSessionRuntime(activeSession, {
@@ -71,12 +74,6 @@ export function HeaderSessionBar({
   }, [startPlan.comment, startPlan.noteTimestamp])
 
   const summaryValues = useMemo(() => {
-    const formatHours = (seconds: number) => {
-      const fixed = (seconds / 3600).toFixed(1)
-      const normalized = fixed === '-0.0' ? '0.0' : fixed
-      return normalized.replace('.', ',')
-    }
-
     const baseWork = summary?.work_seconds ?? 0
     const basePause = summary?.pause_seconds ?? 0
     const expectedSeconds = summary?.expected_seconds ?? 0
@@ -97,11 +94,26 @@ export function HeaderSessionBar({
     const overtimeSeconds = workTotal + vacationSeconds - expectedSeconds
     const targetSeconds = expectedSeconds - vacationSeconds
 
+    const decimalPlaces = timeDisplayFormat === 'decimal' ? 1 : undefined
+    const includeUnit = timeDisplayFormat === 'decimal'
+
     return {
-      workHours: formatHours(workTotal),
-      pauseHours: formatHours(pauseTotal),
-      targetHours: formatHours(targetSeconds),
-      overtimeHours: formatHours(overtimeSeconds),
+      workHours: formatSeconds(workTotal, timeDisplayFormat, {
+        decimalPlaces,
+        includeUnit,
+      }),
+      pauseHours: formatSeconds(pauseTotal, timeDisplayFormat, {
+        decimalPlaces,
+        includeUnit,
+      }),
+      targetHours: formatSeconds(targetSeconds, timeDisplayFormat, {
+        decimalPlaces,
+        includeUnit,
+      }),
+      overtimeHours: formatSeconds(overtimeSeconds, timeDisplayFormat, {
+        decimalPlaces,
+        includeUnit,
+      }),
       overtimePositive: overtimeSeconds >= 0,
     }
   }, [
@@ -110,6 +122,7 @@ export function HeaderSessionBar({
     day,
     workedSeconds,
     pausedSeconds,
+    timeDisplayFormat,
   ])
 
   const dayLabel = useMemo(() => dayjs(day).format('DD.MM.YYYY'), [day])
@@ -332,20 +345,20 @@ export function HeaderSessionBar({
         <dl className="mt-4 grid gap-3 sm:grid-cols-2">
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
             <dt className="text-xs uppercase text-slate-400">Arbeit</dt>
-            <dd className="text-2xl font-semibold text-slate-100">{summaryValues.workHours} h</dd>
+            <dd className="text-2xl font-semibold text-slate-100">{summaryValues.workHours}</dd>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
             <dt className="text-xs uppercase text-slate-400">Pausen</dt>
-            <dd className="text-2xl font-semibold text-slate-100">{summaryValues.pauseHours} h</dd>
+            <dd className="text-2xl font-semibold text-slate-100">{summaryValues.pauseHours}</dd>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
             <dt className="text-xs uppercase text-slate-400">Soll</dt>
-            <dd className="text-2xl font-semibold text-slate-100">{summaryValues.targetHours} h</dd>
+            <dd className="text-2xl font-semibold text-slate-100">{summaryValues.targetHours}</dd>
           </div>
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
             <dt className="text-xs uppercase text-slate-400">Saldo</dt>
             <dd className={`text-2xl font-semibold ${summaryValues.overtimePositive ? 'text-emerald-400' : 'text-rose-300'}`}>
-              {summaryValues.overtimeHours} h
+              {summaryValues.overtimeHours}
             </dd>
           </div>
         </dl>

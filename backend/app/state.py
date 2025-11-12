@@ -23,6 +23,8 @@ CONTACT_FIELDS = (
     "email",
 )
 
+TIME_DISPLAY_FORMATS = {"hh:mm", "decimal"}
+
 
 def _normalize_contact(value: Optional[Dict[str, Any]]) -> Dict[str, str]:
     normalized: Dict[str, str] = {}
@@ -72,6 +74,9 @@ class RuntimeState:
         self.travel_hr_contact: Dict[str, str] = _normalize_contact(base_settings.travel_hr_contact)
         self.travel_letter_template: Dict[str, str] = _normalize_template(base_settings.travel_letter_template)
         self.day_overview_refresh_seconds: int = max(1, int(base_settings.day_overview_refresh_seconds))
+        self.time_display_format: str = (
+            base_settings.time_display_format if base_settings.time_display_format in TIME_DISPLAY_FORMATS else "hh:mm"
+        )
 
     @property
     def block_ips(self) -> List[str]:
@@ -97,6 +102,7 @@ class RuntimeState:
                 "vacation_days_per_year": self.vacation_days_per_year,
                 "vacation_days_carryover": self.vacation_days_carryover,
                 "day_overview_refresh_seconds": self.day_overview_refresh_seconds,
+                "time_display_format": self.time_display_format,
                 "travel_sender_contact": dict(self.travel_sender_contact),
                 "travel_hr_contact": dict(self.travel_hr_contact),
                 "travel_letter_template": dict(self.travel_letter_template),
@@ -143,6 +149,10 @@ class RuntimeState:
                 self.travel_letter_template = _normalize_template(updates["travel_letter_template"])
             if "day_overview_refresh_seconds" in updates and updates["day_overview_refresh_seconds"] is not None:
                 self.day_overview_refresh_seconds = max(1, int(updates["day_overview_refresh_seconds"]))
+            if "time_display_format" in updates and updates["time_display_format"]:
+                value = updates.get("time_display_format")
+                if isinstance(value, str) and value in TIME_DISPLAY_FORMATS:
+                    self.time_display_format = value
 
     def load_from_db(self, session: Session) -> None:
         records = session.query(AppSetting).all()
@@ -186,6 +196,10 @@ class RuntimeState:
                     decoded["travel_letter_template"] = {}
             elif record.key == "day_overview_refresh_seconds":
                 decoded["day_overview_refresh_seconds"] = int(record.value) if record.value else 1
+            elif record.key == "time_display_format":
+                decoded["time_display_format"] = (
+                    record.value if record.value in TIME_DISPLAY_FORMATS else "hh:mm"
+                )
         if decoded:
             self.apply(decoded)
 
@@ -210,6 +224,8 @@ class RuntimeState:
                 value = str(value)
             if key in {"travel_sender_contact", "travel_hr_contact", "travel_letter_template"}:
                 value = json.dumps(value)
+            if key == "time_display_format":
+                value = value if value in TIME_DISPLAY_FORMATS else "hh:mm"
             record = session.query(AppSetting).filter(AppSetting.key == key).one_or_none()
             if record:
                 record.value = value

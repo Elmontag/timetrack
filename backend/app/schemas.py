@@ -3,6 +3,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Dict, List, Optional
 
+from typing_extensions import Literal
+
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
 
@@ -492,6 +494,7 @@ class SettingsResponse(BaseModel):
     vacation_days_per_year: float
     vacation_days_carryover: float
     day_overview_refresh_seconds: int
+    time_display_format: Literal["hh:mm", "decimal"]
     travel_sender_contact: TravelContact
     travel_hr_contact: TravelContact
     travel_letter_template: TravelLetterTemplate
@@ -509,6 +512,7 @@ class SettingsUpdateRequest(BaseModel):
     vacation_days_per_year: Optional[float] = Field(default=None, ge=0)
     vacation_days_carryover: Optional[float] = Field(default=None)
     day_overview_refresh_seconds: Optional[int] = Field(default=None, ge=1, le=3600)
+    time_display_format: Optional[Literal["hh:mm", "decimal"]] = None
     travel_sender_contact: Optional[TravelContact] = None
     travel_hr_contact: Optional[TravelContact] = None
     travel_letter_template: Optional[TravelLetterTemplate] = None

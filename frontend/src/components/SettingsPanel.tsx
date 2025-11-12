@@ -1,6 +1,13 @@
 import clsx from 'clsx'
 import { FormEvent, useCallback, useEffect, useMemo, useState } from 'react'
-import { CalDavCalendar, getCaldavCalendars, getSettings, SettingsResponse, updateSettings } from '../api'
+import {
+  CalDavCalendar,
+  getCaldavCalendars,
+  getSettings,
+  SettingsResponse,
+  TimeDisplayFormat,
+  updateSettings,
+} from '../api'
 
 const CONTACT_FIELDS = [
   'name',
@@ -91,6 +98,7 @@ export function SettingsPanel() {
   const [vacationPerYear, setVacationPerYear] = useState('')
   const [vacationCarryover, setVacationCarryover] = useState('')
   const [dayOverviewRefresh, setDayOverviewRefresh] = useState('')
+  const [timeDisplayFormat, setTimeDisplayFormat] = useState<TimeDisplayFormat>('hh:mm')
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState<'success' | 'error' | null>(null)
   const [availableCalendars, setAvailableCalendars] = useState<CalDavCalendar[]>([])
@@ -137,6 +145,7 @@ export function SettingsPanel() {
       setVacationPerYear(data.vacation_days_per_year.toString())
       setVacationCarryover(data.vacation_days_carryover.toString())
       setDayOverviewRefresh(data.day_overview_refresh_seconds.toString())
+      setTimeDisplayFormat(data.time_display_format)
       setTravelSenderContact(normalizeContact(data.travel_sender_contact))
       setTravelHrContact(normalizeContact(data.travel_hr_contact))
       setTravelLetterSubject(data.travel_letter_template.subject)
@@ -180,6 +189,7 @@ export function SettingsPanel() {
       payload.vacation_days_per_year = vacationPerYear.trim() ? parseFloat(vacationPerYear) : null
       payload.vacation_days_carryover = vacationCarryover.trim() ? parseFloat(vacationCarryover) : null
       payload.day_overview_refresh_seconds = dayOverviewRefresh.trim() ? parseInt(dayOverviewRefresh, 10) : null
+      payload.time_display_format = timeDisplayFormat
       payload.travel_sender_contact = sanitizeContact(travelSenderContact)
       payload.travel_hr_contact = sanitizeContact(travelHrContact)
       payload.travel_letter_template = {
@@ -198,6 +208,7 @@ export function SettingsPanel() {
       setVacationCarryover(updated.vacation_days_carryover.toString())
       setCaldavSelection(updated.caldav_selected_calendars)
       setDayOverviewRefresh(updated.day_overview_refresh_seconds.toString())
+      setTimeDisplayFormat(updated.time_display_format)
       setTravelSenderContact(normalizeContact(updated.travel_sender_contact))
       setTravelHrContact(normalizeContact(updated.travel_hr_contact))
       setTravelLetterSubject(updated.travel_letter_template.subject)
@@ -584,6 +595,22 @@ export function SettingsPanel() {
               <p className="mt-1 text-xs text-slate-500">
                 Kommagetrennt, unterstützt IPs und CIDR-Bereiche. Alle anderen Adressen bleiben zugelassen.
               </p>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="text-sm text-slate-300">
+                Zeitanzeigeformat
+                <select
+                  value={timeDisplayFormat}
+                  onChange={(event) => setTimeDisplayFormat(event.target.value as TimeDisplayFormat)}
+                  className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+                >
+                  <option value="hh:mm">Stunden &amp; Minuten (hh:mm)</option>
+                  <option value="decimal">Dezimalstunden</option>
+                </select>
+                <p className="mt-1 text-xs text-slate-500">
+                  Steuert, ob Zeitangaben außer der laufenden Arbeitszeit als hh:mm oder als Dezimalstunden dargestellt werden.
+                </p>
+              </label>
             </div>
           </div>
 

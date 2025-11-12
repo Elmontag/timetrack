@@ -1455,6 +1455,7 @@ def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> 
                 "vacation_days_per_year",
                 "vacation_days_carryover",
                 "day_overview_refresh_seconds",
+                "time_display_format",
                 "travel_sender_contact",
                 "travel_hr_contact",
                 "travel_letter_template",
