@@ -177,6 +177,47 @@ def test_manual_session_entry(client: TestClient):
     assert any(item["comment"] == "Nachtrag" for item in entries)
 
 
+def test_manual_session_overlap_rejected(client: TestClient):
+    first = {
+        "start_time": "2024-05-10T08:00:00",
+        "end_time": "2024-05-10T10:00:00",
+    }
+    second = {
+        "start_time": "2024-05-10T09:30:00",
+        "end_time": "2024-05-10T11:00:00",
+    }
+    create_first = client.post("/work/manual", json=first)
+    assert create_first.status_code == 201
+    create_second = client.post("/work/manual", json=second)
+    assert create_second.status_code == 409
+    assert create_second.json()["detail"] == "Session overlaps with existing entry"
+
+
+def test_manual_session_update_overlap_rejected(client: TestClient):
+    morning = {
+        "start_time": "2024-05-11T08:00:00",
+        "end_time": "2024-05-11T09:00:00",
+    }
+    afternoon = {
+        "start_time": "2024-05-11T13:00:00",
+        "end_time": "2024-05-11T14:00:00",
+    }
+    first = client.post("/work/manual", json=morning)
+    second = client.post("/work/manual", json=afternoon)
+    assert first.status_code == 201
+    assert second.status_code == 201
+    session_id = second.json()["id"]
+    conflict = client.patch(
+        f"/work/session/{session_id}",
+        json={
+            "start_time": "2024-05-11T08:30:00",
+            "end_time": "2024-05-11T09:30:00",
+        },
+    )
+    assert conflict.status_code == 409
+    assert conflict.json()["detail"] == "Session overlaps with existing entry"
+
+
 def test_session_edit_and_delete(client: TestClient):
     create_resp = client.post(
         "/work/manual",
@@ -223,7 +264,7 @@ def test_session_edit_and_delete(client: TestClient):
     assert all(item["id"] != session_id for item in day_sessions)
 
 
-def test_subtrack_creation(client: TestClient):
+def test_task_creation(client: TestClient):
     payload = {
         "day": "2024-04-01",
         "title": "Kundentermin",
@@ -246,17 +287,10 @@ def test_subtrack_creation(client: TestClient):
     sessions_resp = client.get("/work/day/2024-04-01")
     assert sessions_resp.status_code == 200
     sessions = sessions_resp.json()
-    assert len(sessions) == 1
-    assert sessions[0]["comment"].startswith("Automatisch aus Termin:")
-    session_start = dt.datetime.fromisoformat(sessions[0]["start_time"])
-    expected_start = dt.datetime.fromisoformat(payload["start_time"]).replace(tzinfo=ZoneInfo("Europe/Berlin")).astimezone(dt.timezone.utc)
-    assert session_start == expected_start
-    session_end = dt.datetime.fromisoformat(sessions[0]["stop_time"])
-    expected_end = dt.datetime.fromisoformat(payload["end_time"]).replace(tzinfo=ZoneInfo("Europe/Berlin")).astimezone(dt.timezone.utc)
-    assert session_end == expected_end
+    assert sessions == []
 
 
-def test_subtrack_update_and_delete(client: TestClient):
+def test_task_update_and_delete(client: TestClient):
     create_resp = client.post(
         "/work/subtracks",
         json={
@@ -285,23 +319,8 @@ def test_subtrack_update_and_delete(client: TestClient):
     assert updated["title"] == "Daily Updated"
     assert updated["tags"] == ["team"]
 
-    sessions = client.get("/work/day/2024-04-02").json()
-    assert len(sessions) == 1
-    updated_session = sessions[0]
-    assert updated_session["comment"].startswith("Automatisch aus Termin:")
-    updated_start = dt.datetime.fromisoformat(updated_session["start_time"])
-    expected_updated_start = (
-        dt.datetime.fromisoformat("2024-04-02T09:30:00")
-        .replace(tzinfo=ZoneInfo("Europe/Berlin"))
-        .astimezone(dt.timezone.utc)
-    )
-    assert updated_start == expected_updated_start
-
     delete_resp = client.delete(f"/work/subtracks/{subtrack_id}")
     assert delete_resp.status_code == 204
-
-    sessions_after_delete = client.get("/work/day/2024-04-02").json()
-    assert sessions_after_delete == []
 
 
 def test_calendar_event_participation(client: TestClient):
@@ -332,8 +351,7 @@ def test_calendar_event_participation(client: TestClient):
     assert subtracks[0]["title"] == "Projektmeeting"
 
     sessions = client.get("/work/day/2024-03-01").json()
-    assert len(sessions) == 1
-    assert sessions[0]["comment"].startswith("Automatisch aus Termin:")
+    assert sessions == []
 
 
 def test_calendar_events_trigger_caldav_sync(monkeypatch, client: TestClient):
