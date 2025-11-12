@@ -15,9 +15,12 @@ import {
   createTravel,
   deleteTravel,
   deleteTravelDocument,
+  createTravelLetter,
+  getTravelLetterPreview,
   listTravels,
   TravelDocument,
   TravelTrip,
+  TravelLetterPreview,
   travelDatasetDownloadUrl,
   travelDatasetPrintUrl,
   travelDocumentDownloadUrl,
@@ -43,9 +46,32 @@ const DOCUMENT_TYPES = [
   'Beleg',
   'Reisekostenabrechnung',
   'Sonstige Unterlagen',
+  'Anschreiben',
 ] as const
 
 const SIGNABLE_TYPES = new Set(['Antrag', 'Reisekostenabrechnung'])
+
+const CONTACT_ORDER = [
+  'name',
+  'company',
+  'department',
+  'street',
+  'postal_code',
+  'city',
+  'phone',
+  'email',
+] as const
+
+const CONTACT_LABELS: Record<(typeof CONTACT_ORDER)[number], string> = {
+  name: 'Name',
+  company: 'Firma',
+  department: 'Abteilung',
+  street: 'Straße',
+  postal_code: 'PLZ',
+  city: 'Ort',
+  phone: 'Telefon',
+  email: 'E-Mail',
+}
 
 interface ModalConfig {
   mode: 'create' | 'edit'
@@ -140,6 +166,13 @@ export function TravelManager() {
   })
   const [archivedPage, setArchivedPage] = useState(1)
   const [archivedPageSize, setArchivedPageSize] = useState(10)
+  const [letterTrip, setLetterTrip] = useState<TravelTrip | null>(null)
+  const [letterPreview, setLetterPreview] = useState<TravelLetterPreview | null>(null)
+  const [letterLoading, setLetterLoading] = useState(false)
+  const [letterSaving, setLetterSaving] = useState(false)
+  const [letterError, setLetterError] = useState<string | null>(null)
+  const [letterSubject, setLetterSubject] = useState('')
+  const [letterBody, setLetterBody] = useState('')
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const draftIdCounter = useRef(0)
 
@@ -213,6 +246,75 @@ export function TravelManager() {
       )
     },
     [],
+  )
+
+  const openLetterModal = useCallback(
+    (trip: TravelTrip) => {
+      setOpenDatasetMenuId(null)
+      setLetterTrip(trip)
+      setLetterPreview(null)
+      setLetterSubject(`Reisekostenabrechnung ${trip.title}`.trim())
+      setLetterBody('')
+      setLetterError(null)
+      setLetterLoading(true)
+      getTravelLetterPreview(trip.id)
+        .then((previewData) => {
+          setLetterPreview(previewData)
+          setLetterSubject(previewData.subject)
+          setLetterBody(previewData.body)
+        })
+        .catch((error) => {
+          console.error(error)
+          setLetterError('Anschreiben konnte nicht vorbereitet werden.')
+        })
+        .finally(() => {
+          setLetterLoading(false)
+        })
+    },
+    [],
+  )
+
+  const closeLetterModal = useCallback(() => {
+    setLetterTrip(null)
+    setLetterPreview(null)
+    setLetterSubject('')
+    setLetterBody('')
+    setLetterError(null)
+    setLetterLoading(false)
+    setLetterSaving(false)
+  }, [])
+
+  const handleLetterSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      if (!letterTrip) {
+        return
+      }
+      setLetterSaving(true)
+      setLetterError(null)
+      try {
+        const document = await createTravelLetter(letterTrip.id, {
+          subject: letterSubject.trim(),
+          body: letterBody,
+        })
+        setTrips((prev) =>
+          prev.map((trip) =>
+            trip.id === letterTrip.id
+              ? { ...trip, documents: [...trip.documents, document] }
+              : trip,
+          ),
+        )
+        const downloadUrl = travelDocumentDownloadUrl(document.trip_id, document.id)
+        closeLetterModal()
+        window.open(downloadUrl, '_blank')
+      } catch (error) {
+        console.error(error)
+        setLetterError('Anschreiben konnte nicht erstellt werden.')
+      } finally {
+        setLetterSaving(false)
+      }
+    },
+    [closeLetterModal, letterBody, letterSubject, letterTrip, setTrips],
   )
 
   const loadTrips = useCallback(async () => {
@@ -692,6 +794,13 @@ export function TravelManager() {
                   >
                     Dokument hochladen
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => openLetterModal(trip)}
+                    className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                  >
+                    Anschreiben erzeugen
+                  </button>
                   <div className="relative" data-dataset-menu>
                     <button
                       type="button"
@@ -1046,6 +1155,115 @@ export function TravelManager() {
             <p className="md:col-span-2 text-sm text-rose-300">{formError}</p>
           )}
         </form>
+      </Lightbox>
+
+      <Lightbox
+        open={Boolean(letterTrip)}
+        title={letterTrip ? `Anschreiben für "${letterTrip.title}"` : 'Anschreiben erstellen'}
+        onClose={closeLetterModal}
+        contentClassName="max-h-[70vh] overflow-y-auto pr-1"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeLetterModal}
+              className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+              disabled={letterSaving}
+            >
+              Abbrechen
+            </button>
+            <button
+              type="submit"
+              form="travel-letter"
+              disabled={letterSaving || letterLoading}
+              className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 disabled:opacity-50"
+            >
+              Anschreiben speichern &amp; herunterladen
+            </button>
+          </>
+        }
+      >
+        {letterLoading ? (
+          <p className="text-sm text-slate-400">Anschreiben wird vorbereitet…</p>
+        ) : (
+          <form id="travel-letter" className="space-y-5" onSubmit={handleLetterSubmit}>
+            {letterError && <p className="text-sm text-rose-300">{letterError}</p>}
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Betreff
+              <input
+                type="text"
+                value={letterSubject}
+                onChange={(event) => setLetterSubject(event.target.value)}
+                required
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </label>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Text
+              <textarea
+                value={letterBody}
+                onChange={(event) => setLetterBody(event.target.value)}
+                rows={10}
+                required
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </label>
+            {letterPreview && (
+              <div className="grid gap-4 md:grid-cols-2">
+                {(
+                  [
+                    { title: 'Absender', data: letterPreview.sender_contact },
+                    { title: 'Personalabteilung', data: letterPreview.hr_contact },
+                  ] as const
+                ).map(({ title, data }) => {
+                  const hasEntries = CONTACT_ORDER.some((field) => data[field])
+                  return (
+                    <div
+                      key={title}
+                      className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400"
+                    >
+                      <h4 className="text-sm font-semibold text-slate-200">{title}</h4>
+                      {hasEntries ? (
+                        <ul className="mt-2 space-y-1">
+                          {CONTACT_ORDER.filter((field) => data[field])
+                            .map((field) => (
+                              <li key={field} className="flex items-center justify-between gap-2">
+                                <span className="uppercase tracking-wide text-slate-500">{CONTACT_LABELS[field]}</span>
+                                <span className="text-right text-slate-300">{data[field]}</span>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-slate-500">Keine Angaben hinterlegt.</p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {letterPreview && (
+              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400">
+                <h4 className="text-sm font-semibold text-slate-200">Platzhalter-Vorschau</h4>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Werte, die aktuell für die Vorlage eingesetzt werden. Leer bedeutet, dass der Platzhalter beim Ersetzen entfallen kann.
+                </p>
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  {Object.entries(letterPreview.context)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([key, value]) => (
+                      <div
+                        key={key}
+                        className="flex items-center justify-between gap-2 rounded-md bg-slate-950/70 px-2 py-1"
+                      >
+                        <code className="text-[11px] text-primary">{`{${key}}`}</code>
+                        <span className="max-w-[60%] truncate text-right text-slate-300">{value || '—'}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </form>
+        )}
       </Lightbox>
 
       <Lightbox

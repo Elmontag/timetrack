@@ -33,6 +33,8 @@ from .schemas import (
     SubtrackResponse,
     TravelDocumentResponse,
     TravelDocumentUpdateRequest,
+    TravelLetterCreateRequest,
+    TravelLetterPreviewResponse,
     TravelTripCreateRequest,
     TravelTripResponse,
     TravelTripUpdateRequest,
@@ -53,6 +55,7 @@ from .services import (
     create_holiday,
     create_subtrack,
     create_leave,
+    create_travel_letter_document,
     create_manual_session,
     create_travel_trip,
     delete_holiday,
@@ -60,6 +63,7 @@ from .services import (
     delete_travel_document,
     delete_travel_trip,
     export_sessions,
+    generate_travel_letter_preview,
     fetch_caldav_calendars,
     import_holidays_from_ics,
     list_calendar_events,
@@ -400,6 +404,33 @@ def print_travel_dataset(trip_id: int, db: Session = Depends(get_db)) -> Respons
     return Response(content, media_type="application/pdf", headers=headers)
 
 
+@app.get("/travels/{trip_id}/anschreiben", response_model=TravelLetterPreviewResponse)
+def preview_travel_letter(
+    trip_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TravelLetterPreviewResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    preview = generate_travel_letter_preview(db, state, trip_id)
+    return TravelLetterPreviewResponse(**preview)
+
+
+@app.post(
+    "/travels/{trip_id}/anschreiben",
+    response_model=TravelDocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_travel_letter(
+    trip_id: int,
+    payload: TravelLetterCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TravelDocumentResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    document = create_travel_letter_document(db, state, trip_id, payload.subject, payload.body)
+    return document
+
+
 @app.post("/exports", response_model=ExportResponse, status_code=status.HTTP_201_CREATED)
 def create_export(
     payload: ExportRequest,
@@ -505,6 +536,9 @@ def read_settings(request: Request) -> SettingsResponse:
         expected_weekly_hours=snapshot["expected_weekly_hours"],
         vacation_days_per_year=snapshot["vacation_days_per_year"],
         vacation_days_carryover=snapshot["vacation_days_carryover"],
+        travel_sender_contact=snapshot["travel_sender_contact"],
+        travel_hr_contact=snapshot["travel_hr_contact"],
+        travel_letter_template=snapshot["travel_letter_template"],
     )
 
 
@@ -528,4 +562,7 @@ def write_settings(payload: SettingsUpdateRequest, request: Request, db: Session
         expected_weekly_hours=snapshot["expected_weekly_hours"],
         vacation_days_per_year=snapshot["vacation_days_per_year"],
         vacation_days_carryover=snapshot["vacation_days_carryover"],
+        travel_sender_contact=snapshot["travel_sender_contact"],
+        travel_hr_contact=snapshot["travel_hr_contact"],
+        travel_letter_template=snapshot["travel_letter_template"],
     )

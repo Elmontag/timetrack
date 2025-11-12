@@ -72,9 +72,10 @@ TRAVEL_DOCUMENT_TYPES: Set[str] = {
     "Beleg",
     "Reisekostenabrechnung",
     "Sonstige Unterlagen",
+    "Anschreiben",
 }
 
-TRAVEL_DATASET_DOCUMENT_TYPES: Set[str] = {"Rechnung", "Beleg", "Reisekostenabrechnung"}
+TRAVEL_DATASET_DOCUMENT_TYPES: Set[str] = {"Rechnung", "Beleg", "Reisekostenabrechnung", "Anschreiben"}
 
 SIGNABLE_DOCUMENT_TYPES: Set[str] = {"Antrag", "Reisekostenabrechnung"}
 
@@ -1315,6 +1316,9 @@ def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> 
                 "expected_weekly_hours",
                 "vacation_days_per_year",
                 "vacation_days_carryover",
+                "travel_sender_contact",
+                "travel_hr_contact",
+                "travel_letter_template",
             }
         },
     )
@@ -1521,6 +1525,221 @@ def _travel_directory(trip_id: int) -> Path:
 def _sanitize_filename(name: str) -> str:
     normalized = re.sub(r"[^A-Za-z0-9_.-]", "_", name.strip()) if name else ""
     return normalized or "dokument"
+
+
+def _format_contact_block(contact: Dict[str, str]) -> List[str]:
+    lines: List[str] = []
+    for key in ("name", "company", "department"):
+        value = contact.get(key, "").strip()
+        if value:
+            lines.append(value)
+    street = contact.get("street", "").strip()
+    if street:
+        lines.append(street)
+    postal = contact.get("postal_code", "").strip()
+    city = contact.get("city", "").strip()
+    city_line = " ".join(part for part in (postal, city) if part)
+    if city_line:
+        lines.append(city_line)
+    phone = contact.get("phone", "").strip()
+    if phone:
+        lines.append(f"Telefon: {phone}")
+    email = contact.get("email", "").strip()
+    if email:
+        lines.append(email)
+    return lines
+
+
+def _build_letter_context(state: RuntimeState, trip: TravelTrip) -> Dict[str, str]:
+    sender = dict(state.travel_sender_contact)
+    hr = dict(state.travel_hr_contact)
+    now_local = _now().astimezone(LOCAL_TZ)
+    context: Dict[str, str] = defaultdict(str)  # type: ignore[assignment]
+
+    for key, value in sender.items():
+        context[f"sender_{key}"] = value
+    for key, value in hr.items():
+        context[f"hr_{key}"] = value
+
+    context.update(
+        sender_name=sender.get("name", ""),
+        sender_company=sender.get("company", ""),
+        sender_department=sender.get("department", ""),
+        sender_street=sender.get("street", ""),
+        sender_postal_code=sender.get("postal_code", ""),
+        sender_city=sender.get("city", ""),
+        sender_phone=sender.get("phone", ""),
+        sender_email=sender.get("email", ""),
+        hr_name=hr.get("name", ""),
+        hr_company=hr.get("company", ""),
+        hr_department=hr.get("department", ""),
+        hr_street=hr.get("street", ""),
+        hr_postal_code=hr.get("postal_code", ""),
+        hr_city=hr.get("city", ""),
+        hr_phone=hr.get("phone", ""),
+        hr_email=hr.get("email", ""),
+        today_date=now_local.strftime("%d.%m.%Y"),
+        trip_title=trip.title,
+        trip_destination=trip.destination or "",
+        trip_purpose=trip.purpose or "",
+        trip_start_date=trip.start_date.strftime("%d.%m.%Y"),
+        trip_end_date=trip.end_date.strftime("%d.%m.%Y"),
+    )
+
+    duration_days = (trip.end_date - trip.start_date).days + 1
+    context["trip_duration_days"] = str(duration_days)
+    period = f"{trip.start_date.strftime('%d.%m.%Y')} – {trip.end_date.strftime('%d.%m.%Y')}"
+    context["trip_period"] = period
+
+    destination = trip.destination or ""
+    if destination:
+        context["trip_destination_clause"] = f"nach {destination}"
+    else:
+        context["trip_destination_clause"] = ""
+
+    purpose = trip.purpose or ""
+    if purpose:
+        context["trip_purpose_clause"] = f"wegen {purpose}"
+    else:
+        context["trip_purpose_clause"] = ""
+
+    sender_block = "\n".join(_format_contact_block(sender)).strip()
+    hr_block = "\n".join(_format_contact_block(hr)).strip()
+    context["sender_block"] = sender_block
+    context["hr_block"] = hr_block
+
+    return context
+
+
+def _render_letter_template(template: str, context: Dict[str, str]) -> str:
+    if not template:
+        return ""
+    safe_context: defaultdict[str, str] = defaultdict(str)  # type: ignore[assignment]
+    safe_context.update(context)
+    try:
+        rendered = template.format_map(safe_context)
+    except Exception:
+        return template
+    return rendered
+
+
+def generate_travel_letter_preview(db: Session, state: RuntimeState, trip_id: int) -> Dict[str, Any]:
+    trip = _get_travel_trip(db, trip_id)
+    context = _build_letter_context(state, trip)
+    template = state.travel_letter_template
+    subject = _render_letter_template(template.get("subject", ""), context).strip()
+    body = _render_letter_template(template.get("body", ""), context)
+    body = body.replace("\r\n", "\n").strip()
+    return {
+        "subject": subject or template.get("subject", ""),
+        "body": body or template.get("body", ""),
+        "context": dict(context),
+        "sender_contact": dict(state.travel_sender_contact),
+        "hr_contact": dict(state.travel_hr_contact),
+    }
+
+
+def _render_travel_letter_pdf(
+    trip: TravelTrip,
+    subject: str,
+    body: str,
+    sender_contact: Dict[str, str],
+    hr_contact: Dict[str, str],
+) -> bytes:
+    buffer = io.BytesIO()
+    page = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    page.setTitle(f"Anschreiben {trip.title}")
+    top_margin = height - 2.5 * cm
+    y = top_margin
+
+    def ensure_space(current_y: float, required: float, font: tuple[str, int]) -> float:
+        if current_y - required < 2 * cm:
+            page.showPage()
+            page.setFont(font[0], font[1])
+            return height - 2 * cm
+        return current_y
+
+    page.setFont("Helvetica", 9)
+    for line in _format_contact_block(sender_contact):
+        if not line:
+            continue
+        y = ensure_space(y, 0.5 * cm, ("Helvetica", 9))
+        page.drawString(2 * cm, y, line)
+        y -= 0.5 * cm
+
+    y -= 0.7 * cm
+    page.setFont("Helvetica", 11)
+    for line in _format_contact_block(hr_contact):
+        if not line:
+            continue
+        y = ensure_space(y, 0.6 * cm, ("Helvetica", 11))
+        page.drawString(2 * cm, y, line)
+        y -= 0.6 * cm
+
+    now_local = _now().astimezone(LOCAL_TZ)
+    date_label = now_local.strftime("%d.%m.%Y")
+    y -= 0.6 * cm
+    page.setFont("Helvetica", 11)
+    page.drawString(2 * cm, y, date_label)
+    y -= 1.0 * cm
+
+    subject_text = subject.strip()
+    if subject_text:
+        page.setFont("Helvetica-Bold", 12)
+        page.drawString(2 * cm, y, f"Betreff: {subject_text}")
+        y -= 1.2 * cm
+
+    page.setFont("Helvetica", 11)
+    line_height = 0.65 * cm
+    paragraphs = body.replace("\r\n", "\n").split("\n\n") if body else []
+
+    for paragraph in paragraphs:
+        lines = paragraph.split("\n") if paragraph else [""]
+        for line in lines:
+            chunks = _wrap_text(line.strip(), 88) or [""]
+            for chunk in chunks:
+                y = ensure_space(y, line_height, ("Helvetica", 11))
+                page.drawString(2 * cm, y, chunk)
+                y -= line_height
+        y -= 0.4 * cm
+
+    page.save()
+    buffer.seek(0)
+    return buffer.read()
+
+
+def create_travel_letter_document(
+    db: Session,
+    state: RuntimeState,
+    trip_id: int,
+    subject: str,
+    body: str,
+) -> TravelDocument:
+    cleaned_subject = subject.strip()
+    cleaned_body = body.replace("\r\n", "\n").strip()
+    if not cleaned_subject or not cleaned_body:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Betreff und Text dürfen nicht leer sein")
+    trip = _get_travel_trip(db, trip_id)
+    pdf_bytes = _render_travel_letter_pdf(
+        trip,
+        cleaned_subject,
+        cleaned_body,
+        state.travel_sender_contact,
+        state.travel_hr_contact,
+    )
+    timestamp = _now().astimezone(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
+    original_name = f"Anschreiben_{trip.start_date}_{trip.id}_{timestamp}.pdf"
+    comment = f"Automatisch erstellt am {dt.datetime.now(LOCAL_TZ).strftime('%d.%m.%Y %H:%M')}"
+    document = add_travel_document(
+        db,
+        trip.id,
+        "Anschreiben",
+        original_name,
+        pdf_bytes,
+        comment,
+    )
+    return document
 
 
 def _get_travel_trip(db: Session, trip_id: int) -> TravelTrip:

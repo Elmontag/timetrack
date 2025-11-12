@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
@@ -384,6 +384,22 @@ class TravelDocumentUpdateRequest(BaseModel):
     signed: Optional[bool] = None
 
 
+class TravelContact(BaseModel):
+    name: Optional[str] = None
+    company: Optional[str] = None
+    department: Optional[str] = None
+    street: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+
+
+class TravelLetterTemplate(BaseModel):
+    subject: str
+    body: str
+
+
 class SettingsResponse(BaseModel):
     environment: str
     timezone: str
@@ -399,6 +415,9 @@ class SettingsResponse(BaseModel):
     expected_weekly_hours: Optional[float]
     vacation_days_per_year: float
     vacation_days_carryover: float
+    travel_sender_contact: TravelContact
+    travel_hr_contact: TravelContact
+    travel_letter_template: TravelLetterTemplate
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -412,6 +431,22 @@ class SettingsUpdateRequest(BaseModel):
     expected_weekly_hours: Optional[float] = Field(default=None, ge=0)
     vacation_days_per_year: Optional[float] = Field(default=None, ge=0)
     vacation_days_carryover: Optional[float] = Field(default=None)
+    travel_sender_contact: Optional[TravelContact] = None
+    travel_hr_contact: Optional[TravelContact] = None
+    travel_letter_template: Optional[TravelLetterTemplate] = None
+
+
+class TravelLetterPreviewResponse(BaseModel):
+    subject: str
+    body: str
+    context: Dict[str, str]
+    sender_contact: TravelContact
+    hr_contact: TravelContact
+
+
+class TravelLetterCreateRequest(BaseModel):
+    subject: str = Field(min_length=1)
+    body: str = Field(min_length=1)
 
 
 class HolidayResponse(BaseModel):

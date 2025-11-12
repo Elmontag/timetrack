@@ -91,6 +91,22 @@ export interface TravelTrip {
   dataset_print_path: string
 }
 
+export interface TravelContact {
+  name: string | null
+  company: string | null
+  department: string | null
+  street: string | null
+  postal_code: string | null
+  city: string | null
+  phone: string | null
+  email: string | null
+}
+
+export interface TravelLetterTemplate {
+  subject: string
+  body: string
+}
+
 export interface SettingsResponse {
   environment: string
   timezone: string
@@ -106,6 +122,9 @@ export interface SettingsResponse {
   expected_weekly_hours: number | null
   vacation_days_per_year: number
   vacation_days_carryover: number
+  travel_sender_contact: TravelContact
+  travel_hr_contact: TravelContact
+  travel_letter_template: TravelLetterTemplate
 }
 
 export interface CalDavCalendar {
@@ -357,6 +376,27 @@ export async function updateTravel(
 
 export async function deleteTravel(tripId: number) {
   await client.delete(`/travels/${tripId}`)
+}
+
+export interface TravelLetterPreview {
+  subject: string
+  body: string
+  context: Record<string, string>
+  sender_contact: TravelContact
+  hr_contact: TravelContact
+}
+
+export async function getTravelLetterPreview(tripId: number) {
+  const response = await client.get<TravelLetterPreview>(`/travels/${tripId}/anschreiben`)
+  return response.data
+}
+
+export async function createTravelLetter(
+  tripId: number,
+  payload: { subject: string; body: string },
+) {
+  const response = await client.post<TravelDocument>(`/travels/${tripId}/anschreiben`, payload)
+  return response.data
 }
 
 export async function uploadTravelDocument(
