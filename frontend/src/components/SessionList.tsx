@@ -234,8 +234,8 @@ export function SessionList({ refreshKey }: Props) {
                 <div className="space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-300">
                     <span>
-                      {new Date(session.start_time).toLocaleTimeString()} –{' '}
-                      {session.stop_time ? new Date(session.stop_time).toLocaleTimeString() : 'laufend'}
+                      {dayjs(session.start_time).format('HH:mm')} –{' '}
+                      {session.stop_time ? dayjs(session.stop_time).format('HH:mm') : 'laufend'}
                     </span>
                     <span className="font-mono text-slate-100">{formatDuration(session.total_seconds)}</span>
                   </div>

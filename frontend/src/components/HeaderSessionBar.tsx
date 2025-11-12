@@ -32,7 +32,7 @@ export function HeaderSessionBar({
   day,
   summary,
 }: Props) {
-  const { runtime, status } = useSessionRuntime(activeSession)
+  const { runtime, status, workedSeconds, pausedSeconds } = useSessionRuntime(activeSession)
   const isActive = Boolean(activeSession && ['active', 'paused'].includes(activeSession.status))
   const isPaused = activeSession?.status === 'paused'
 
@@ -46,31 +46,49 @@ export function HeaderSessionBar({
   const plannedComment = startPlan.comment.trim().length > 0 ? startPlan.comment.trim() : null
 
   const summaryValues = useMemo(() => {
-    if (!summary) {
-      return {
-        workHours: '0,0',
-        pauseHours: '0,0',
-        targetHours: '0,0',
-        overtimeHours: '0,0',
-        overtimePositive: false,
-      }
+    const formatHours = (seconds: number) => {
+      const fixed = (seconds / 3600).toFixed(1)
+      const normalized = fixed === '-0.0' ? '0.0' : fixed
+      return normalized.replace('.', ',')
     }
-    const workHours = (summary.work_seconds / 3600).toFixed(1).replace('.', ',')
-    const pauseHours = (summary.pause_seconds / 3600).toFixed(1).replace('.', ',')
-    const overtimeHours = (summary.overtime_seconds / 3600).toFixed(1).replace('.', ',')
-    const targetSeconds = summary.work_seconds - summary.overtime_seconds
-    const targetHours = (targetSeconds / 3600).toFixed(1).replace('.', ',')
+
+    const baseWork = summary?.work_seconds ?? 0
+    const basePause = summary?.pause_seconds ?? 0
+    const expectedSeconds = summary?.expected_seconds ?? 0
+    const vacationSeconds = summary?.vacation_seconds ?? 0
+
+    let workTotal = baseWork
+    let pauseTotal = basePause
+
+    if (
+      activeSession &&
+      ['active', 'paused'].includes(activeSession.status) &&
+      dayjs(activeSession.start_time).format('YYYY-MM-DD') === day
+    ) {
+      workTotal += workedSeconds
+      pauseTotal += pausedSeconds
+    }
+
+    const overtimeSeconds = workTotal + vacationSeconds - expectedSeconds
+    const targetSeconds = expectedSeconds - vacationSeconds
+
     return {
-      workHours,
-      pauseHours,
-      targetHours,
-      overtimeHours,
-      overtimePositive: summary.overtime_seconds >= 0,
+      workHours: formatHours(workTotal),
+      pauseHours: formatHours(pauseTotal),
+      targetHours: formatHours(targetSeconds),
+      overtimeHours: formatHours(overtimeSeconds),
+      overtimePositive: overtimeSeconds >= 0,
     }
-  }, [summary])
+  }, [
+    summary,
+    activeSession,
+    day,
+    workedSeconds,
+    pausedSeconds,
+  ])
 
   const dayLabel = useMemo(() => dayjs(day).format('DD.MM.YYYY'), [day])
-  const lastUpdated = useMemo(() => dayjs().format('HH:mm:ss'), [summary])
+  const lastUpdated = dayjs().format('HH:mm:ss')
 
   const handleClick = async (action: 'start' | 'pause' | 'stop') => {
     try {
