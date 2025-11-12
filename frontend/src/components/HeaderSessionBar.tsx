@@ -24,7 +24,6 @@ interface Props {
   onStartPlanChange: (plan: { startTime: string; comment: string; noteTimestamp: string | null }) => void
   day: string
   summary: DaySummary | null
-  refreshIntervalSeconds?: number
   onRuntimeNoteCreate: (content: string, createdAt: string) => Promise<void>
   timeDisplayFormat: TimeDisplayFormat
 }
@@ -39,14 +38,10 @@ export function HeaderSessionBar({
   onStartPlanChange,
   day,
   summary,
-  refreshIntervalSeconds = 1,
   onRuntimeNoteCreate,
   timeDisplayFormat,
 }: Props) {
-  const refreshMs = Math.max(1, refreshIntervalSeconds) * 1000
-  const { runtime, status, workedSeconds, pausedSeconds } = useSessionRuntime(activeSession, {
-    refreshIntervalMs: refreshMs,
-  })
+  const { runtime, status, workedSeconds, pausedSeconds } = useSessionRuntime(activeSession)
   const isActive = Boolean(activeSession && ['active', 'paused'].includes(activeSession.status))
   const isPaused = activeSession?.status === 'paused'
   const [noteMode, setNoteMode] = useState<'start' | 'runtime'>('start')

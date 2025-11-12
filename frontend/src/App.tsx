@@ -350,7 +350,6 @@ export default function App() {
             onStartPlanChange={setStartPlan}
             day={currentDay}
             summary={daySummary}
-            refreshIntervalSeconds={dayOverviewRefreshSeconds}
             onRuntimeNoteCreate={handleRuntimeNote}
             timeDisplayFormat={timeDisplayFormat}
           />
