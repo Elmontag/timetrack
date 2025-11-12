@@ -136,6 +136,15 @@ export function SessionList({ refreshKey, timeDisplayFormat }: Props) {
     )
   }
 
+  const formatSessionDuration = useCallback(
+    (seconds: number | null | undefined) =>
+      formatSeconds(seconds ?? 0, timeDisplayFormat, {
+        decimalPlaces: timeDisplayFormat === 'decimal' ? 2 : undefined,
+        includeUnit: timeDisplayFormat === 'decimal',
+      }),
+    [timeDisplayFormat],
+  )
+
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 shadow">
       <div className="flex items-center justify-between gap-2">
@@ -320,12 +329,3 @@ export function SessionList({ refreshKey, timeDisplayFormat }: Props) {
     </div>
   )
 }
-  const formatSessionDuration = useCallback(
-    (seconds: number | null | undefined) =>
-      formatSeconds(seconds ?? 0, timeDisplayFormat, {
-        decimalPlaces: timeDisplayFormat === 'decimal' ? 2 : undefined,
-        includeUnit: timeDisplayFormat === 'decimal',
-      }),
-    [timeDisplayFormat],
-  )
-
