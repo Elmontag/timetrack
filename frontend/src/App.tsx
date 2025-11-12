@@ -124,11 +124,14 @@ export default function App() {
 
   useEffect(() => {
     if (!activeSession) return
+    const intervalSeconds = Number.isFinite(dayOverviewRefreshSeconds)
+      ? Math.max(1, dayOverviewRefreshSeconds)
+      : 60
     const timer = window.setInterval(() => {
       setRefreshKey(Date.now().toString())
-    }, 60_000)
+    }, intervalSeconds * 1000)
     return () => window.clearInterval(timer)
-  }, [activeSession])
+  }, [activeSession, dayOverviewRefreshSeconds])
 
   const loadSummary = useCallback(async () => {
     const today = dayjs().format('YYYY-MM-DD')
