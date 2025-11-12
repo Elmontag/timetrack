@@ -59,6 +59,8 @@ class Settings(BaseSettings):
         }
     )
 
+    day_overview_refresh_seconds: int = int(os.getenv("TT_DAY_OVERVIEW_REFRESH_SECONDS", "1"))
+
     caldav_url: Optional[str] = os.getenv("TT_CALDAV_URL")
     caldav_user: Optional[str] = os.getenv("TT_CALDAV_USER")
     caldav_password: Optional[str] = os.getenv("TT_CALDAV_PASSWORD")

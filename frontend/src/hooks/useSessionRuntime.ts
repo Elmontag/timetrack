@@ -9,8 +9,13 @@ interface RuntimeDetails {
   pausedSeconds: number
 }
 
-export function useSessionRuntime(session: WorkSession | null): RuntimeDetails {
+interface RuntimeOptions {
+  refreshIntervalMs?: number
+}
+
+export function useSessionRuntime(session: WorkSession | null, options: RuntimeOptions = {}): RuntimeDetails {
   const [tick, setTick] = useState(() => Date.now())
+  const intervalMs = Math.max(250, options.refreshIntervalMs ?? 1000)
 
   useEffect(() => {
     if (!session || session.status === 'stopped') {
@@ -19,9 +24,9 @@ export function useSessionRuntime(session: WorkSession | null): RuntimeDetails {
     setTick(Date.now())
     const interval = window.setInterval(() => {
       setTick(Date.now())
-    }, 1000)
+    }, intervalMs)
     return () => window.clearInterval(interval)
-  }, [session])
+  }, [session, intervalMs])
 
   return useMemo(() => {
     if (!session) {

@@ -71,6 +71,7 @@ class RuntimeState:
         self.travel_sender_contact: Dict[str, str] = _normalize_contact(base_settings.travel_sender_contact)
         self.travel_hr_contact: Dict[str, str] = _normalize_contact(base_settings.travel_hr_contact)
         self.travel_letter_template: Dict[str, str] = _normalize_template(base_settings.travel_letter_template)
+        self.day_overview_refresh_seconds: int = max(1, int(base_settings.day_overview_refresh_seconds))
 
     @property
     def block_ips(self) -> List[str]:
@@ -95,6 +96,7 @@ class RuntimeState:
                 "expected_weekly_hours": self.expected_weekly_hours,
                 "vacation_days_per_year": self.vacation_days_per_year,
                 "vacation_days_carryover": self.vacation_days_carryover,
+                "day_overview_refresh_seconds": self.day_overview_refresh_seconds,
                 "travel_sender_contact": dict(self.travel_sender_contact),
                 "travel_hr_contact": dict(self.travel_hr_contact),
                 "travel_letter_template": dict(self.travel_letter_template),
@@ -139,6 +141,8 @@ class RuntimeState:
                 self.travel_hr_contact = _normalize_contact(updates["travel_hr_contact"])
             if "travel_letter_template" in updates and updates["travel_letter_template"] is not None:
                 self.travel_letter_template = _normalize_template(updates["travel_letter_template"])
+            if "day_overview_refresh_seconds" in updates and updates["day_overview_refresh_seconds"] is not None:
+                self.day_overview_refresh_seconds = max(1, int(updates["day_overview_refresh_seconds"]))
 
     def load_from_db(self, session: Session) -> None:
         records = session.query(AppSetting).all()
@@ -180,6 +184,8 @@ class RuntimeState:
                     decoded["travel_letter_template"] = json.loads(record.value)
                 except json.JSONDecodeError:
                     decoded["travel_letter_template"] = {}
+            elif record.key == "day_overview_refresh_seconds":
+                decoded["day_overview_refresh_seconds"] = int(record.value) if record.value else 1
         if decoded:
             self.apply(decoded)
 
@@ -198,6 +204,8 @@ class RuntimeState:
                 continue
             if key in {"expected_daily_hours", "expected_weekly_hours"}:
                 value = "" if value in (None, "") else str(value)
+            if key == "day_overview_refresh_seconds":
+                value = str(max(1, int(value))) if value not in (None, "") else "1"
             if key in {"vacation_days_per_year", "vacation_days_carryover"}:
                 value = str(value)
             if key in {"travel_sender_contact", "travel_hr_contact", "travel_letter_template"}:

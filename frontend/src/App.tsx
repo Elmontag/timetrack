@@ -4,8 +4,10 @@ import clsx from 'clsx'
 import { API_BASE } from './config'
 import {
   DaySummary,
+  SettingsResponse,
   getDaySummaries,
   getSessionsForDay,
+  getSettings,
   pauseSession,
   startSession,
   stopSession,
@@ -48,6 +50,16 @@ export default function App() {
     }
     return initial
   })
+  const [dayOverviewRefreshSeconds, setDayOverviewRefreshSeconds] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem('tt-day-overview-refresh')
+      const parsed = stored ? Number(stored) : NaN
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed
+      }
+    }
+    return 1
+  })
 
   const triggerRefresh = useCallback(() => setRefreshKey(Date.now().toString()), [])
   const { run: runStart, loading: starting } = useAsync(startSession)
@@ -62,6 +74,41 @@ export default function App() {
       setActiveSession(current)
     }
     init()
+  }, [])
+
+  useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const data = await getSettings()
+        if (data.day_overview_refresh_seconds > 0) {
+          setDayOverviewRefreshSeconds(data.day_overview_refresh_seconds)
+        }
+      } catch (error) {
+        console.error('Einstellungen konnten nicht geladen werden', error)
+      }
+    }
+    loadSettings()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('tt-day-overview-refresh', dayOverviewRefreshSeconds.toString())
+    }
+  }, [dayOverviewRefreshSeconds])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    const handler = (event: Event) => {
+      const custom = event as CustomEvent<SettingsResponse>
+      const value = custom.detail?.day_overview_refresh_seconds
+      if (typeof value === 'number' && value > 0) {
+        setDayOverviewRefreshSeconds(value)
+      }
+    }
+    window.addEventListener('tt-settings-updated', handler as EventListener)
+    return () => window.removeEventListener('tt-settings-updated', handler as EventListener)
   }, [])
 
   useEffect(() => {
@@ -234,6 +281,7 @@ export default function App() {
             startPlan={startPlan}
             day={currentDay}
             summary={daySummary}
+            refreshIntervalSeconds={dayOverviewRefreshSeconds}
           />
           <nav className="flex flex-wrap gap-2">
             {[

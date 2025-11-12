@@ -134,6 +134,7 @@ export interface SettingsResponse {
   expected_weekly_hours: number | null
   vacation_days_per_year: number
   vacation_days_carryover: number
+  day_overview_refresh_seconds: number
   travel_sender_contact: TravelContact
   travel_hr_contact: TravelContact
   travel_letter_template: TravelLetterTemplate
@@ -292,6 +293,26 @@ export async function createSubtrack(payload: {
 }) {
   const response = await client.post<Subtrack>('/work/subtracks', payload)
   return response.data
+}
+
+export async function updateSubtrack(
+  subtrackId: number,
+  payload: {
+    day?: string | null
+    title?: string | null
+    start_time?: string | null
+    end_time?: string | null
+    project?: string | null
+    tags?: string[] | null
+    note?: string | null
+  },
+) {
+  const response = await client.patch<Subtrack>(`/work/subtracks/${subtrackId}`, payload)
+  return response.data
+}
+
+export async function deleteSubtrack(subtrackId: number) {
+  await client.delete(`/work/subtracks/${subtrackId}`)
 }
 
 export async function createCalendarEvent(payload: {

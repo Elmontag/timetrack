@@ -216,6 +216,60 @@ def test_subtrack_creation(client: TestClient):
     sessions = sessions_resp.json()
     assert len(sessions) == 1
     assert sessions[0]["comment"].startswith("Automatisch aus Termin:")
+    session_start = dt.datetime.fromisoformat(sessions[0]["start_time"])
+    expected_start = dt.datetime.fromisoformat(payload["start_time"]).replace(tzinfo=ZoneInfo("Europe/Berlin")).astimezone(dt.timezone.utc)
+    assert session_start == expected_start
+    session_end = dt.datetime.fromisoformat(sessions[0]["stop_time"])
+    expected_end = dt.datetime.fromisoformat(payload["end_time"]).replace(tzinfo=ZoneInfo("Europe/Berlin")).astimezone(dt.timezone.utc)
+    assert session_end == expected_end
+
+
+def test_subtrack_update_and_delete(client: TestClient):
+    create_resp = client.post(
+        "/work/subtracks",
+        json={
+            "day": "2024-04-02",
+            "title": "Daily",
+            "start_time": "2024-04-02T08:00:00",
+            "end_time": "2024-04-02T09:00:00",
+            "note": "Sync",
+        },
+    )
+    assert create_resp.status_code == 201
+    subtrack_id = create_resp.json()["id"]
+
+    update_resp = client.patch(
+        f"/work/subtracks/{subtrack_id}",
+        json={
+            "title": "Daily Updated",
+            "start_time": "2024-04-02T09:30:00",
+            "end_time": "2024-04-02T10:15:00",
+            "note": "Neuer Fokus",
+            "tags": ["team"],
+        },
+    )
+    assert update_resp.status_code == 200
+    updated = update_resp.json()
+    assert updated["title"] == "Daily Updated"
+    assert updated["tags"] == ["team"]
+
+    sessions = client.get("/work/day/2024-04-02").json()
+    assert len(sessions) == 1
+    updated_session = sessions[0]
+    assert updated_session["comment"].startswith("Automatisch aus Termin:")
+    updated_start = dt.datetime.fromisoformat(updated_session["start_time"])
+    expected_updated_start = (
+        dt.datetime.fromisoformat("2024-04-02T09:30:00")
+        .replace(tzinfo=ZoneInfo("Europe/Berlin"))
+        .astimezone(dt.timezone.utc)
+    )
+    assert updated_start == expected_updated_start
+
+    delete_resp = client.delete(f"/work/subtracks/{subtrack_id}")
+    assert delete_resp.status_code == 204
+
+    sessions_after_delete = client.get("/work/day/2024-04-02").json()
+    assert sessions_after_delete == []
 
 
 def test_calendar_event_participation(client: TestClient):
@@ -337,6 +391,7 @@ def test_settings_update(client: TestClient, session: Session):
         "caldav_selected_calendars": ["Work", "Private"],
         "expected_daily_hours": 7.5,
         "expected_weekly_hours": 37.5,
+        "day_overview_refresh_seconds": 5,
     }
     resp = client.put("/settings", json=update_payload)
     assert resp.status_code == 200
@@ -346,9 +401,11 @@ def test_settings_update(client: TestClient, session: Session):
     assert set(data["caldav_selected_calendars"]) == {"Work", "Private"}
     assert data["expected_daily_hours"] == 7.5
     assert data["expected_weekly_hours"] == 37.5
+    assert data["day_overview_refresh_seconds"] == 5
 
     stored = session.query(models.AppSetting).all()
     assert any(item.key == "caldav_url" for item in stored)
+    assert any(item.key == "day_overview_refresh_seconds" for item in stored)
 
 
 def test_expected_hours_impact_summary(client: TestClient):

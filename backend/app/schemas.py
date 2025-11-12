@@ -288,6 +288,16 @@ class SubtrackCreateRequest(BaseModel):
     note: Optional[str] = None
 
 
+class SubtrackUpdateRequest(BaseModel):
+    day: Optional[dt.date] = None
+    title: Optional[str] = None
+    start_time: Optional[dt.datetime] = None
+    end_time: Optional[dt.datetime] = None
+    project: Optional[str] = None
+    tags: Optional[List[str]] = None
+    note: Optional[str] = None
+
+
 class TravelInvoiceReference(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -455,6 +465,7 @@ class SettingsResponse(BaseModel):
     expected_weekly_hours: Optional[float]
     vacation_days_per_year: float
     vacation_days_carryover: float
+    day_overview_refresh_seconds: int
     travel_sender_contact: TravelContact
     travel_hr_contact: TravelContact
     travel_letter_template: TravelLetterTemplate
@@ -471,6 +482,7 @@ class SettingsUpdateRequest(BaseModel):
     expected_weekly_hours: Optional[float] = Field(default=None, ge=0)
     vacation_days_per_year: Optional[float] = Field(default=None, ge=0)
     vacation_days_carryover: Optional[float] = Field(default=None)
+    day_overview_refresh_seconds: Optional[int] = Field(default=None, ge=1, le=3600)
     travel_sender_contact: Optional[TravelContact] = None
     travel_hr_contact: Optional[TravelContact] = None
     travel_letter_template: Optional[TravelLetterTemplate] = None

@@ -32,6 +32,7 @@ from .schemas import (
     LeaveCreateRequest,
     LeaveEntryResponse,
     SubtrackCreateRequest,
+    SubtrackUpdateRequest,
     SubtrackResponse,
     TravelDocumentResponse,
     TravelDocumentReorderRequest,
@@ -63,6 +64,7 @@ from .services import (
     create_travel_trip,
     delete_holiday,
     delete_session,
+    delete_subtrack,
     delete_travel_document,
     delete_travel_trip,
     export_sessions,
@@ -84,6 +86,7 @@ from .services import (
     stop_session,
     update_runtime_settings,
     update_session,
+    update_subtrack,
     update_travel_document,
     update_travel_trip,
 )
@@ -219,7 +222,7 @@ def create_work_subtrack(
     payload: SubtrackCreateRequest,
     request: Request,
     db: Session = Depends(get_db),
-) -> SubtrackResponse:
+    ) -> SubtrackResponse:
     state: RuntimeState = request.app.state.runtime_state
     subtrack = create_subtrack(
         db,
@@ -233,6 +236,30 @@ def create_work_subtrack(
         payload.note,
     )
     return subtrack
+
+
+@app.patch("/work/subtracks/{subtrack_id}", response_model=SubtrackResponse)
+def update_work_subtrack(
+    subtrack_id: int,
+    payload: SubtrackUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> SubtrackResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    changes = payload.model_dump(exclude_unset=True)
+    subtrack = update_subtrack(db, state, subtrack_id, changes)
+    return subtrack
+
+
+@app.delete("/work/subtracks/{subtrack_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_work_subtrack(
+    subtrack_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    state: RuntimeState = request.app.state.runtime_state
+    delete_subtrack(db, state, subtrack_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.patch("/work/session/{session_id}", response_model=WorkSessionBase)
@@ -625,6 +652,7 @@ def read_settings(request: Request) -> SettingsResponse:
         expected_weekly_hours=snapshot["expected_weekly_hours"],
         vacation_days_per_year=snapshot["vacation_days_per_year"],
         vacation_days_carryover=snapshot["vacation_days_carryover"],
+        day_overview_refresh_seconds=snapshot["day_overview_refresh_seconds"],
         travel_sender_contact=snapshot["travel_sender_contact"],
         travel_hr_contact=snapshot["travel_hr_contact"],
         travel_letter_template=snapshot["travel_letter_template"],
@@ -651,6 +679,7 @@ def write_settings(payload: SettingsUpdateRequest, request: Request, db: Session
         expected_weekly_hours=snapshot["expected_weekly_hours"],
         vacation_days_per_year=snapshot["vacation_days_per_year"],
         vacation_days_carryover=snapshot["vacation_days_carryover"],
+        day_overview_refresh_seconds=snapshot["day_overview_refresh_seconds"],
         travel_sender_contact=snapshot["travel_sender_contact"],
         travel_hr_contact=snapshot["travel_hr_contact"],
         travel_letter_template=snapshot["travel_letter_template"],

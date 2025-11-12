@@ -704,13 +704,43 @@ def _ensure_session_for_subtrack(
     return _ensure_session_for_span(
         db,
         state,
-        subtrack.start_time,
-        subtrack.end_time,
+        _from_db_datetime(subtrack.start_time),
+        _from_db_datetime(subtrack.end_time),
         title,
         subtrack.project,
         list(subtrack.tags or []),
         subtrack.note,
     )
+
+
+def _remove_auto_session(
+    db: Session,
+    state: RuntimeState,
+    start_time: Optional[dt.datetime],
+    end_time: Optional[dt.datetime],
+    title: str,
+    note: Optional[str],
+) -> Optional[dt.date]:
+    start_utc = _from_db_datetime(start_time)
+    end_utc = _from_db_datetime(end_time)
+    if start_utc is None or end_utc is None:
+        return None
+    auto_comment = _auto_session_comment(title, note)
+    session = (
+        db.query(WorkSession)
+        .filter(
+            WorkSession.start_time == start_utc,
+            WorkSession.stop_time == end_utc,
+            WorkSession.comment == auto_comment,
+        )
+        .one_or_none()
+    )
+    if session is None:
+        return None
+    day = start_utc.astimezone(LOCAL_TZ).date()
+    db.delete(session)
+    update_day_summary(db, day, state)
+    return day
 
 
 def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
@@ -969,6 +999,62 @@ def list_subtracks(db: Session, day: dt.date) -> List[WorkSubtrack]:
         .order_by(WorkSubtrack.start_time.asc(), WorkSubtrack.created_at.asc())
         .all()
     )
+
+
+def update_subtrack(
+    db: Session,
+    state: RuntimeState,
+    subtrack_id: int,
+    changes: Dict[str, Any],
+) -> WorkSubtrack:
+    subtrack = db.get(WorkSubtrack, subtrack_id)
+    if not subtrack:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subtrack not found")
+
+    original_day = subtrack.day
+    _remove_auto_session(db, state, subtrack.start_time, subtrack.end_time, subtrack.title, subtrack.note)
+
+    if "day" in changes and changes["day"] is not None:
+        subtrack.day = changes["day"]
+    if "title" in changes and changes["title"] is not None:
+        subtrack.title = changes["title"]
+    if "start_time" in changes:
+        value = changes["start_time"]
+        subtrack.start_time = _ensure_utc(value) if value else None
+    if "end_time" in changes:
+        value = changes["end_time"]
+        subtrack.end_time = _ensure_utc(value) if value else None
+    if "project" in changes:
+        subtrack.project = changes["project"]
+    if "tags" in changes and changes["tags"] is not None:
+        subtrack.tags = changes["tags"]
+    if "note" in changes:
+        subtrack.note = changes["note"]
+
+    db.add(subtrack)
+    db.commit()
+    db.refresh(subtrack)
+
+    _ensure_session_for_subtrack(db, state, subtrack)
+
+    affected_days: Set[dt.date] = {original_day, subtrack.day}
+    for day in affected_days:
+        update_day_summary(db, day, state)
+    return subtrack
+
+
+def delete_subtrack(db: Session, state: RuntimeState, subtrack_id: int) -> None:
+    subtrack = db.get(WorkSubtrack, subtrack_id)
+    if not subtrack:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subtrack not found")
+
+    day = subtrack.day
+    _remove_auto_session(db, state, subtrack.start_time, subtrack.end_time, subtrack.title, subtrack.note)
+
+    db.delete(subtrack)
+    db.commit()
+
+    update_day_summary(db, day, state)
 
 
 def create_leave(
@@ -1325,6 +1411,7 @@ def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> 
                 "expected_weekly_hours",
                 "vacation_days_per_year",
                 "vacation_days_carryover",
+                "day_overview_refresh_seconds",
                 "travel_sender_contact",
                 "travel_hr_contact",
                 "travel_letter_template",

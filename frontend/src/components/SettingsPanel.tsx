@@ -90,6 +90,7 @@ export function SettingsPanel() {
   const [expectedWeekly, setExpectedWeekly] = useState('')
   const [vacationPerYear, setVacationPerYear] = useState('')
   const [vacationCarryover, setVacationCarryover] = useState('')
+  const [dayOverviewRefresh, setDayOverviewRefresh] = useState('')
   const [saving, setSaving] = useState(false)
   const [feedback, setFeedback] = useState<'success' | 'error' | null>(null)
   const [availableCalendars, setAvailableCalendars] = useState<CalDavCalendar[]>([])
@@ -135,6 +136,7 @@ export function SettingsPanel() {
       setExpectedWeekly(data.expected_weekly_hours?.toString() ?? '')
       setVacationPerYear(data.vacation_days_per_year.toString())
       setVacationCarryover(data.vacation_days_carryover.toString())
+      setDayOverviewRefresh(data.day_overview_refresh_seconds.toString())
       setTravelSenderContact(normalizeContact(data.travel_sender_contact))
       setTravelHrContact(normalizeContact(data.travel_hr_contact))
       setTravelLetterSubject(data.travel_letter_template.subject)
@@ -177,6 +179,7 @@ export function SettingsPanel() {
       payload.expected_weekly_hours = expectedWeekly.trim() ? parseFloat(expectedWeekly) : null
       payload.vacation_days_per_year = vacationPerYear.trim() ? parseFloat(vacationPerYear) : null
       payload.vacation_days_carryover = vacationCarryover.trim() ? parseFloat(vacationCarryover) : null
+      payload.day_overview_refresh_seconds = dayOverviewRefresh.trim() ? parseInt(dayOverviewRefresh, 10) : null
       payload.travel_sender_contact = sanitizeContact(travelSenderContact)
       payload.travel_hr_contact = sanitizeContact(travelHrContact)
       payload.travel_letter_template = {
@@ -194,6 +197,7 @@ export function SettingsPanel() {
       setVacationPerYear(updated.vacation_days_per_year.toString())
       setVacationCarryover(updated.vacation_days_carryover.toString())
       setCaldavSelection(updated.caldav_selected_calendars)
+      setDayOverviewRefresh(updated.day_overview_refresh_seconds.toString())
       setTravelSenderContact(normalizeContact(updated.travel_sender_contact))
       setTravelHrContact(normalizeContact(updated.travel_hr_contact))
       setTravelLetterSubject(updated.travel_letter_template.subject)
@@ -204,6 +208,9 @@ export function SettingsPanel() {
       setFeedback('success')
       setPasswordUpdate(false)
       setCaldavPassword('')
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(new CustomEvent<SettingsResponse>('tt-settings-updated', { detail: updated }))
+      }
     } catch (error) {
       console.error(error)
       setFeedback('error')
@@ -352,6 +359,21 @@ export function SettingsPanel() {
                   value={vacationCarryover}
                   onChange={(event) => setVacationCarryover(event.target.value)}
                   placeholder="z. B. 2.5"
+                  className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+                />
+              </label>
+            </div>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="text-sm text-slate-300">
+                Aktualisierungsintervall Tagesübersicht (Sekunden)
+                <input
+                  type="number"
+                  min="1"
+                  max="3600"
+                  step="1"
+                  value={dayOverviewRefresh}
+                  onChange={(event) => setDayOverviewRefresh(event.target.value)}
+                  placeholder="z. B. 1"
                   className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
                 />
               </label>

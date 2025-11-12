@@ -20,6 +20,7 @@ interface Props {
   }
   day: string
   summary: DaySummary | null
+  refreshIntervalSeconds?: number
 }
 
 export function HeaderSessionBar({
@@ -31,8 +32,12 @@ export function HeaderSessionBar({
   startPlan,
   day,
   summary,
+  refreshIntervalSeconds = 1,
 }: Props) {
-  const { runtime, status, workedSeconds, pausedSeconds } = useSessionRuntime(activeSession)
+  const refreshMs = Math.max(1, refreshIntervalSeconds) * 1000
+  const { runtime, status, workedSeconds, pausedSeconds } = useSessionRuntime(activeSession, {
+    refreshIntervalMs: refreshMs,
+  })
   const isActive = Boolean(activeSession && ['active', 'paused'].includes(activeSession.status))
   const isPaused = activeSession?.status === 'paused'
 
