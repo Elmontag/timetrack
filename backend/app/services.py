@@ -82,6 +82,8 @@ SIGNABLE_DOCUMENT_TYPES: Set[str] = {"Antrag", "Reisekostenabrechnung"}
 
 UNSET: Any = object()
 
+SUBTRACK_START_TOLERANCE = dt.timedelta(seconds=59)
+
 
 def _normalize_collection_label(value: Optional[str]) -> Optional[str]:
     if value is None:
@@ -974,10 +976,14 @@ def create_subtrack(
         if start_time_utc is None:
             start_time_utc = session_start
         if start_time_utc < session_start:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Subtrack start must not be before session start",
-            )
+            delta = session_start - start_time_utc
+            if delta <= SUBTRACK_START_TOLERANCE:
+                start_time_utc = session_start
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Subtrack start must not be before session start",
+                )
         if end_time_utc and session_end and end_time_utc > session_end:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -1065,7 +1071,13 @@ def update_subtrack(
         value = changes["end_time"]
         subtrack.end_time = _ensure_utc(value) if value else None
 
-    if subtrack.start_time and subtrack.end_time and subtrack.end_time <= subtrack.start_time:
+    normalized_start = _from_db_datetime(subtrack.start_time)
+    if normalized_start is not None:
+        subtrack.start_time = normalized_start
+    normalized_end = _from_db_datetime(subtrack.end_time)
+    if normalized_end is not None:
+        subtrack.end_time = normalized_end
+    if normalized_start and normalized_end and normalized_end <= normalized_start:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subtrack end must be after start")
 
     if target_session is not None:
@@ -1076,10 +1088,14 @@ def update_subtrack(
         if subtrack.start_time is None:
             subtrack.start_time = session_start
         if subtrack.start_time < session_start:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Subtrack start must not be before session start",
-            )
+            delta = session_start - subtrack.start_time
+            if delta <= SUBTRACK_START_TOLERANCE:
+                subtrack.start_time = session_start
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Subtrack start must not be before session start",
+                )
         if subtrack.end_time and session_end and subtrack.end_time > session_end:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

@@ -300,6 +300,39 @@ def test_subtrack_creation(client: TestClient):
     assert subtrack_entry["end_time"] == expected_end
 
 
+def test_subtrack_creation_for_active_session_with_minute_precision(client: TestClient):
+    start_resp = client.post("/work/start", json={})
+    assert start_resp.status_code == 201
+    session = start_resp.json()
+    session_id = session["id"]
+
+    start_utc = dt.datetime.fromisoformat(session["start_time"])
+    berlin = ZoneInfo("Europe/Berlin")
+    local_floor = start_utc.astimezone(berlin).replace(second=0, microsecond=0)
+
+    payload = {
+        "day": local_floor.date().isoformat(),
+        "title": "Live Subtrack",
+        "start_time": local_floor.strftime("%Y-%m-%dT%H:%M:%S"),
+        "session_id": session_id,
+    }
+
+    create_resp = client.post("/work/subtracks", json=payload)
+    assert create_resp.status_code == 201
+    subtrack = create_resp.json()
+    assert subtrack["session_id"] == session_id
+    assert subtrack["start_time"] == session["start_time"]
+
+    stop_local = (local_floor + dt.timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%S")
+    update_resp = client.patch(
+        f"/work/subtracks/{subtrack['id']}",
+        json={"end_time": stop_local},
+    )
+    assert update_resp.status_code == 200
+
+    stop_session = client.post("/work/stop", json={})
+    assert stop_session.status_code == 200
+
 def test_subtrack_update_and_delete(client: TestClient):
     session_resp = client.post(
         "/work/manual",

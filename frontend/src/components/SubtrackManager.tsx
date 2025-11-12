@@ -146,7 +146,7 @@ export function SubtrackManager({ day, refreshKey, activeSession, onChange, time
       setFormState({
         title: '',
         sessionId: context.sessionId,
-        startTime: dayjs().format('HH:mm'),
+        startTime: dayjs().format('HH:mm:ss'),
         endTime: '',
         project: activeSession?.project ?? '',
         tags: activeSession?.tags?.join(', ') ?? '',
@@ -159,8 +159,8 @@ export function SubtrackManager({ day, refreshKey, activeSession, onChange, time
       setFormState({
         title: subtrack.title,
         sessionId: subtrack.session_id ?? '',
-        startTime: subtrack.start_time ? dayjs(subtrack.start_time).format('HH:mm') : '',
-        endTime: subtrack.end_time ? dayjs(subtrack.end_time).format('HH:mm') : '',
+        startTime: subtrack.start_time ? dayjs(subtrack.start_time).format('HH:mm:ss') : '',
+        endTime: subtrack.end_time ? dayjs(subtrack.end_time).format('HH:mm:ss') : '',
         project: subtrack.project ?? '',
         tags: subtrack.tags.join(', '),
         note: subtrack.note ?? '',
@@ -479,6 +479,7 @@ export function SubtrackManager({ day, refreshKey, activeSession, onChange, time
                 value={formState.startTime}
                 onChange={(event) => setFormState((prev) => ({ ...prev, startTime: event.target.value }))}
                 required
+                step={1}
                 className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
               />
             </label>
@@ -488,6 +489,7 @@ export function SubtrackManager({ day, refreshKey, activeSession, onChange, time
                 type="time"
                 value={formState.endTime}
                 onChange={(event) => setFormState((prev) => ({ ...prev, endTime: event.target.value }))}
+                step={1}
                 className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
               />
             </label>
