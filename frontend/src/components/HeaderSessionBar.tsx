@@ -1,14 +1,15 @@
 import { PauseIcon, PlayIcon, StopIcon } from '@heroicons/react/24/outline'
 import dayjs from 'dayjs'
-import { useMemo } from 'react'
-import { DaySummary, WorkSession } from '../api'
+import { useEffect, useMemo, useState } from 'react'
+import { DaySummary, updateSession, WorkSession } from '../api'
 import { useSessionRuntime } from '../hooks/useSessionRuntime'
+import { useAsync } from '../hooks/useAsync'
 
 interface Props {
   activeSession: WorkSession | null
   onStart: () => Promise<void>
   onPauseToggle: () => Promise<void>
-  onStop: () => Promise<void>
+  onStop: (comment?: string) => Promise<void>
   loading: {
     start: boolean
     pause: boolean
@@ -18,6 +19,7 @@ interface Props {
     startTime: string
     comment: string
   }
+  onStartPlanChange: (plan: { startTime: string; comment: string }) => void
   day: string
   summary: DaySummary | null
   refreshIntervalSeconds?: number
@@ -30,6 +32,7 @@ export function HeaderSessionBar({
   onStop,
   loading,
   startPlan,
+  onStartPlanChange,
   day,
   summary,
   refreshIntervalSeconds = 1,
@@ -40,6 +43,12 @@ export function HeaderSessionBar({
   })
   const isActive = Boolean(activeSession && ['active', 'paused'].includes(activeSession.status))
   const isPaused = activeSession?.status === 'paused'
+  const [activeNote, setActiveNote] = useState('')
+  const { run: runUpdate, loading: updatingNote } = useAsync(updateSession)
+
+  useEffect(() => {
+    setActiveNote(activeSession?.comment ?? '')
+  }, [activeSession?.id, activeSession?.comment])
 
   const nextStartDescription = useMemo(() => {
     if (!startPlan.startTime) {
@@ -109,6 +118,15 @@ export function HeaderSessionBar({
     }
   }
 
+  const handleSaveNote = async () => {
+    if (!activeSession) return
+    await runUpdate(activeSession.id, { comment: activeNote || null })
+  }
+
+  const handleStopWithNote = async () => {
+    await onStop(activeNote)
+  }
+
   return (
     <div className="grid gap-4 xl:grid-cols-[1.8fr,1fr]">
       <div className="w-full rounded-2xl border border-slate-800 bg-slate-950/70 px-5 py-4 shadow-lg shadow-slate-950/40">
@@ -117,10 +135,18 @@ export function HeaderSessionBar({
             <p className="text-xs uppercase tracking-wide text-slate-500">Laufende Arbeitszeit</p>
             <p className="mt-2 font-mono text-4xl font-semibold text-primary">{runtime}</p>
             <p className="mt-1 text-sm text-slate-300">Status: {status}</p>
-            <p className="mt-2 text-xs text-slate-500">
-              Nächster Start {nextStartDescription}
-              {plannedComment && <span className="ml-1 text-slate-400">– „{plannedComment}“</span>}
-            </p>
+            {!isActive && (
+              <p className="mt-2 text-xs text-slate-500">
+                Nächster Start {nextStartDescription}
+                {plannedComment && <span className="ml-1 text-slate-400">– „{plannedComment}“</span>}
+              </p>
+            )}
+            {isActive && activeSession && (
+              <p className="mt-2 text-xs text-slate-500">
+                Gestartet am {dayjs(activeSession.start_time).format('DD.MM.YYYY HH:mm')} – Status{' '}
+                {activeSession.status === 'paused' ? 'Pausiert' : 'Laufend'}
+              </p>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -152,6 +178,69 @@ export function HeaderSessionBar({
             </button>
           </div>
         </div>
+        {!isActive && (
+          <div className="mt-6 space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="text-sm text-slate-300">
+                Geplanter Arbeitsstart
+                <input
+                  type="datetime-local"
+                  value={startPlan.startTime}
+                  onChange={(event) =>
+                    onStartPlanChange({ ...startPlan, startTime: event.target.value })
+                  }
+                  className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+                />
+                <span className="mt-1 block text-xs text-slate-500">Standard ist die aktuelle Zeit.</span>
+              </label>
+              <label className="text-sm text-slate-300">
+                Notiz zum Start
+                <textarea
+                  value={startPlan.comment}
+                  onChange={(event) =>
+                    onStartPlanChange({ ...startPlan, comment: event.target.value })
+                  }
+                  rows={3}
+                  placeholder="Was steht an?"
+                  className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+                />
+              </label>
+            </div>
+            <p className="text-xs text-slate-500">
+              Plane Startzeit und Notiz vor. Der Start erfolgt über die Buttons oben oder per Permalink.
+            </p>
+          </div>
+        )}
+        {isActive && (
+          <div className="mt-6 space-y-4">
+            <label className="block text-sm text-slate-300">
+              Notiz zur laufenden Sitzung
+              <textarea
+                value={activeNote}
+                onChange={(event) => setActiveNote(event.target.value)}
+                rows={4}
+                className="mt-2 w-full rounded-lg border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </label>
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <button
+                type="button"
+                disabled={updatingNote}
+                onClick={handleSaveNote}
+                className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-200 transition hover:border-primary hover:text-primary disabled:opacity-60"
+              >
+                Notiz speichern
+              </button>
+              <button
+                type="button"
+                onClick={handleStopWithNote}
+                className="inline-flex items-center rounded-md border border-rose-500/60 bg-rose-500/10 px-3 py-1.5 text-xs font-semibold text-rose-200 transition hover:bg-rose-500/20"
+              >
+                Stop mit Notiz
+              </button>
+            </div>
+          </div>
+        )}
       </div>
       <div className="rounded-2xl border border-slate-800 bg-slate-950/70 px-5 py-4 shadow-lg shadow-slate-950/40">
         <div className="flex flex-wrap items-start justify-between gap-3">

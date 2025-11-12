@@ -188,17 +188,7 @@ export default function App() {
   const content = useMemo(() => {
     switch (activeTab) {
       case 'myday':
-        return (
-          <MyDayPage
-            activeSession={activeSession}
-            startConfig={startPlan}
-            onStartConfigChange={(config) => setStartPlan(config)}
-            onStart={handleStart}
-            onStop={handleStop}
-            refreshKey={refreshKey}
-            triggerRefresh={triggerRefresh}
-          />
-        )
+        return <MyDayPage refreshKey={refreshKey} />
       case 'work':
         return (
           <div className="space-y-6">
@@ -246,7 +236,7 @@ export default function App() {
       default:
         return null
     }
-  }, [activeTab, activeSession, handleStart, handleStop, refreshKey, startPlan, triggerRefresh, workView])
+  }, [activeTab, refreshKey, triggerRefresh, workView])
 
   return (
     <div
@@ -276,9 +266,10 @@ export default function App() {
             activeSession={activeSession}
             onStart={() => handleStart()}
             onPauseToggle={handlePauseToggle}
-            onStop={() => handleStop()}
+            onStop={handleStop}
             loading={{ start: starting, pause: pausing, stop: stopping }}
             startPlan={startPlan}
+            onStartPlanChange={(plan) => setStartPlan(plan)}
             day={currentDay}
             summary={daySummary}
             refreshIntervalSeconds={dayOverviewRefreshSeconds}
