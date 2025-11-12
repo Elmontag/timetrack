@@ -16,6 +16,7 @@ def test_start_pause_resume_stop_flow(client: TestClient):
     data_start = start_resp.json()
     session_id = data_start["id"]
     assert data_start["start_time"].endswith("+00:00")
+    assert data_start["notes"] == []
 
     pause_resp = client.post("/work/pause")
     assert pause_resp.status_code == 200
@@ -30,12 +31,43 @@ def test_start_pause_resume_stop_flow(client: TestClient):
     data = stop_resp.json()
     assert data["status"] == "stopped"
     assert data["total_seconds"] >= 0
+    assert "notes" in data
 
     day = dt.date.fromisoformat(data["start_time"].split("T")[0])
     sessions_resp = client.get(f"/work/day/{day}")
     assert sessions_resp.status_code == 200
     sessions = sessions_resp.json()
     assert any(s["id"] == session_id for s in sessions)
+    assert all("notes" in s for s in sessions)
+
+
+def test_session_note_creation_flow(client: TestClient):
+    start_resp = client.post("/work/start", json={})
+    assert start_resp.status_code == 201
+    session_id = start_resp.json()["id"]
+
+    note_payload = {
+        "content": "Planung besprochen",
+        "note_type": "start",
+        "created_at": "2024-01-01T08:15:00",
+    }
+    note_resp = client.post(f"/work/session/{session_id}/notes", json=note_payload)
+    assert note_resp.status_code == 201
+    note_data = note_resp.json()
+    assert note_data["session_id"] == session_id
+    assert note_data["note_type"] == "start"
+    assert note_data["content"] == "Planung besprochen"
+    assert note_data["created_at"].startswith("2024-01-01T07:15") or note_data["created_at"].startswith("2024-01-01T08:15")
+
+    day = start_resp.json()["start_time"].split("T")[0]
+    sessions_resp = client.get(f"/work/day/{day}")
+    assert sessions_resp.status_code == 200
+    session = sessions_resp.json()[0]
+    assert session["notes"][0]["content"] == "Planung besprochen"
+    assert session["comment"] == "Planung besprochen"
+
+    stop_resp = client.post("/work/stop", json={})
+    assert stop_resp.status_code == 200
 
     summary_resp = client.get("/days", params={"from_date": day, "to_date": day})
     assert summary_resp.status_code == 200

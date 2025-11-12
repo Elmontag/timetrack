@@ -31,6 +31,8 @@ from .schemas import (
     HolidayResponse,
     LeaveCreateRequest,
     LeaveEntryResponse,
+    SessionNoteCreateRequest,
+    SessionNoteResponse,
     SubtrackCreateRequest,
     SubtrackUpdateRequest,
     SubtrackResponse,
@@ -61,6 +63,7 @@ from .services import (
     create_leave,
     create_travel_letter_document,
     create_manual_session,
+    add_session_note,
     create_travel_trip,
     delete_holiday,
     delete_session,
@@ -186,6 +189,20 @@ def work_stop(payload: WorkStopRequest, request: Request, db: Session = Depends(
     state: RuntimeState = request.app.state.runtime_state
     session = stop_session(db, state, payload.comment)
     return session
+
+
+@app.post(
+    "/work/session/{session_id}/notes",
+    response_model=SessionNoteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def work_add_session_note(
+    session_id: int,
+    payload: SessionNoteCreateRequest,
+    db: Session = Depends(get_db),
+) -> SessionNoteResponse:
+    note = add_session_note(db, session_id, payload.content, payload.note_type, payload.created_at)
+    return note
 
 
 @app.post("/work/manual", response_model=WorkSessionBase, status_code=status.HTTP_201_CREATED)

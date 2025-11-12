@@ -3,6 +3,16 @@ import dayjs from 'dayjs'
 import duration from 'dayjs/plugin/duration'
 import { API_BASE } from './config'
 
+export type SessionNoteType = 'start' | 'runtime'
+
+export interface SessionNote {
+  id: number
+  session_id: number
+  note_type: SessionNoteType
+  content: string
+  created_at: string
+}
+
 export interface WorkSession {
   id: number
   start_time: string
@@ -14,6 +24,7 @@ export interface WorkSession {
   paused_duration: number
   total_seconds: number | null
   last_pause_start: string | null
+  notes: SessionNote[]
 }
 
 export interface DaySummary {
@@ -212,6 +223,14 @@ export async function createManualSession(payload: {
 
 export async function getSessionsForDay(day: string) {
   const response = await client.get<WorkSession[]>(`/work/day/${day}`)
+  return response.data
+}
+
+export async function createSessionNote(
+  sessionId: number,
+  payload: { content: string; note_type?: SessionNoteType; created_at?: string },
+) {
+  const response = await client.post<SessionNote>(`/work/session/${sessionId}/notes`, payload)
   return response.data
 }
 

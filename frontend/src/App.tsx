@@ -9,6 +9,7 @@ import {
   getSessionsForDay,
   getSettings,
   pauseSession,
+  createSessionNote,
   startSession,
   stopSession,
   WorkSession,
@@ -37,6 +38,7 @@ export default function App() {
   const [startPlan, setStartPlan] = useState(() => ({
     startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
     comment: '',
+    noteTimestamp: null as string | null,
   }))
   const [currentDay, setCurrentDay] = useState(() => dayjs().format('YYYY-MM-DD'))
   const [daySummary, setDaySummary] = useState<DaySummary | null>(null)
@@ -156,10 +158,32 @@ export default function App() {
         payload.comment = rawComment.trim()
       }
       const session = await runStart(payload)
-      setActiveSession(session)
+      let nextSession: WorkSession = session
+      const plannedNote = startPlan.comment.trim()
+      if (plannedNote) {
+        const plannedTimestamp = startPlan.noteTimestamp
+        const noteCreatedAt = plannedTimestamp
+          ? plannedTimestamp.endsWith('Z')
+            ? plannedTimestamp
+            : dayjs(plannedTimestamp).toISOString()
+          : dayjs().toISOString()
+        try {
+          const note = await createSessionNote(session.id, {
+            content: plannedNote,
+            note_type: 'start',
+            created_at: noteCreatedAt,
+          })
+          const existingNotes = Array.isArray(session.notes) ? session.notes : []
+          nextSession = { ...session, comment: note.content, notes: [...existingNotes, note] }
+        } catch (error) {
+          console.error('Startnotiz konnte nicht gespeichert werden', error)
+        }
+      }
+      setActiveSession(nextSession)
       setStartPlan({
         startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
         comment: '',
+        noteTimestamp: null,
       })
       triggerRefresh()
     },
@@ -183,6 +207,44 @@ export default function App() {
       triggerRefresh()
     },
     [runStop, triggerRefresh],
+  )
+
+  const activeSessionId = activeSession?.id
+
+  const handleRuntimeNote = useCallback(
+    async (content: string, createdAt?: string) => {
+      if (!activeSessionId) {
+        return
+      }
+      const trimmed = content.trim()
+      if (!trimmed) {
+        return
+      }
+      const iso = createdAt
+        ? createdAt.endsWith('Z')
+          ? createdAt
+          : dayjs(createdAt).toISOString()
+        : dayjs().toISOString()
+      try {
+        const note = await createSessionNote(activeSessionId, {
+          content: trimmed,
+          note_type: 'runtime',
+          created_at: iso,
+        })
+        setActiveSession((prev) => {
+          if (!prev || prev.id !== activeSessionId) {
+            return prev
+          }
+          const existingNotes = Array.isArray(prev.notes) ? prev.notes : []
+          return { ...prev, comment: note.content, notes: [...existingNotes, note] }
+        })
+        triggerRefresh()
+      } catch (error) {
+        console.error('Notiz konnte nicht gespeichert werden', error)
+        throw error
+      }
+    },
+    [activeSessionId, triggerRefresh],
   )
 
   const content = useMemo(() => {
@@ -269,10 +331,11 @@ export default function App() {
             onStop={handleStop}
             loading={{ start: starting, pause: pausing, stop: stopping }}
             startPlan={startPlan}
-            onStartPlanChange={(plan) => setStartPlan(plan)}
+            onStartPlanChange={setStartPlan}
             day={currentDay}
             summary={daySummary}
             refreshIntervalSeconds={dayOverviewRefreshSeconds}
+            onRuntimeNoteCreate={handleRuntimeNote}
           />
           <nav className="flex flex-wrap gap-2">
             {[

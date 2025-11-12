@@ -35,6 +35,12 @@ class WorkSession(Base):
     last_pause_start = Column(DateTime(timezone=True), nullable=True)
     total_seconds = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    notes = relationship(
+        "WorkSessionNote",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="WorkSessionNote.created_at, WorkSessionNote.id",
+    )
 
     def mark_paused(self, now: dt.datetime) -> None:
         if self.status == "paused":
@@ -68,6 +74,18 @@ class WorkSession(Base):
         effective = duration.total_seconds() - self.paused_duration
         self.total_seconds = max(int(effective), 0)
         self.status = "stopped"
+
+
+class WorkSessionNote(Base):
+    __tablename__ = "work_session_notes"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("work_sessions.id"), nullable=False, index=True)
+    note_type = Column(String(20), nullable=False, default="runtime")
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    session = relationship("WorkSession", back_populates="notes")
 
 
 class DaySummary(Base):

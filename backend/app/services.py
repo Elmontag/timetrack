@@ -20,7 +20,7 @@ from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 from sqlalchemy import and_, func, or_
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .models import (
@@ -33,6 +33,7 @@ from .models import (
     TravelTrip,
     WorkSession,
     WorkSubtrack,
+    WorkSessionNote,
 )
 from .state import RuntimeState
 from .utils import normalize_calendar_identifier, normalize_calendar_selection
@@ -57,6 +58,8 @@ LOCAL_TZ = ZoneInfo(settings.timezone)
 AUTO_SESSION_COMMENT_PREFIX = "Automatisch aus Termin: "
 
 CALENDAR_EVENT_STATUSES: Set[str] = {"pending", "attended", "absent", "cancelled"}
+
+SESSION_NOTE_TYPES: Set[str] = {"start", "runtime"}
 
 TRAVEL_WORKFLOW_STATES: Dict[str, str] = {
     "request_draft": "Dienstreiseantrag",
@@ -97,6 +100,16 @@ def _ensure_utc(value: dt.datetime) -> dt.datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=LOCAL_TZ)
     return value.astimezone(UTC)
+
+
+def _normalize_note_timestamp(value: Optional[dt.datetime]) -> dt.datetime:
+    if value is None:
+        return _now()
+    if value.tzinfo is None:
+        localized = value.replace(tzinfo=LOCAL_TZ)
+    else:
+        localized = value.astimezone(LOCAL_TZ)
+    return localized.astimezone(UTC)
 
 
 def _day_bounds(day: dt.date) -> Tuple[dt.datetime, dt.datetime]:
@@ -616,6 +629,35 @@ def stop_session(db: Session, state: RuntimeState, comment: Optional[str] = None
     return session
 
 
+def add_session_note(
+    db: Session,
+    session_id: int,
+    content: str,
+    note_type: str,
+    created_at: Optional[dt.datetime] = None,
+) -> WorkSessionNote:
+    session = db.get(WorkSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    text = (content or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Notiz darf nicht leer sein")
+    normalized_type = note_type if note_type in SESSION_NOTE_TYPES else "runtime"
+    timestamp = _normalize_note_timestamp(created_at)
+    note = WorkSessionNote(
+        session=session,
+        content=text,
+        note_type=normalized_type,
+        created_at=timestamp,
+    )
+    db.add(note)
+    session.comment = text
+    db.commit()
+    db.refresh(note)
+    db.refresh(session)
+    return note
+
+
 def create_manual_session(
     db: Session,
     state: RuntimeState,
@@ -747,6 +789,7 @@ def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
     start, end = _day_bounds(day)
     sessions = (
         db.query(WorkSession)
+        .options(selectinload(WorkSession.notes))
         .filter(and_(WorkSession.start_time >= start, WorkSession.start_time < end))
         .order_by(WorkSession.start_time.asc())
         .all()

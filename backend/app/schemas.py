@@ -13,6 +13,24 @@ def _serialize_datetime(value: dt.datetime) -> str:
         value = value.astimezone(dt.timezone.utc)
     return value.isoformat()
 
+class SessionNoteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    session_id: int
+    note_type: str
+    content: str
+    created_at: dt.datetime
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "note_type": self.note_type,
+            "content": self.content,
+            "created_at": _serialize_datetime(self.created_at),
+        }
+
 
 class WorkSessionBase(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -26,6 +44,7 @@ class WorkSessionBase(BaseModel):
     paused_duration: int
     total_seconds: Optional[int]
     last_pause_start: Optional[dt.datetime]
+    notes: List[SessionNoteResponse] = Field(default_factory=list)
 
     @model_serializer(mode="plain", when_used="json")
     def _serialize(self) -> dict[str, Any]:
@@ -42,6 +61,7 @@ class WorkSessionBase(BaseModel):
             "last_pause_start": _serialize_datetime(self.last_pause_start)
             if self.last_pause_start
             else None,
+            "notes": [note._serialize() for note in self.notes],
         }
 
 
@@ -75,6 +95,12 @@ class WorkSessionUpdateRequest(BaseModel):
     project: Optional[str] = None
     tags: Optional[List[str]] = None
     comment: Optional[str] = None
+
+
+class SessionNoteCreateRequest(BaseModel):
+    content: str
+    note_type: str = Field(default="runtime")
+    created_at: Optional[dt.datetime] = None
 
 
 class WorkToggleResponse(BaseModel):
