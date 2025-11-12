@@ -19,7 +19,7 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from .config import settings
@@ -1879,6 +1879,12 @@ def add_travel_document(
                 detail="Rechnungen können nicht mit anderen Rechnungen verknüpft werden",
             )
         linked_invoice = invoice
+    next_index = (
+        db.query(func.max(TravelDocument.sort_index))
+        .filter(TravelDocument.trip_id == trip.id)
+        .scalar()
+    )
+    sort_index = (next_index or 0) + 1 if next_index is not None else 0
     document = TravelDocument(
         trip=trip,
         document_type=document_type,
@@ -1886,6 +1892,7 @@ def add_travel_document(
         original_name=original_name or stored_name,
         comment=comment,
         collection_label=normalized_label,
+        sort_index=sort_index,
     )
     if linked_invoice is not None:
         document.linked_invoice = linked_invoice
@@ -1952,6 +1959,36 @@ def update_travel_document(
     return document
 
 
+def reorder_travel_documents(db: Session, trip_id: int, ordered_ids: List[int]) -> TravelTrip:
+    trip = _get_travel_trip(db, trip_id)
+    existing_ids = [document.id for document in trip.documents]
+    if not ordered_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Es wurden keine Dokumente zur Neuanordnung übermittelt",
+        )
+    if len(ordered_ids) != len(existing_ids) or set(ordered_ids) != set(existing_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Die übermittelte Reihenfolge stimmt nicht mit den vorhandenen Dokumenten überein",
+        )
+    documents_by_id = {document.id: document for document in trip.documents}
+    for position, document_id in enumerate(ordered_ids):
+        document = documents_by_id.get(document_id)
+        if document is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unbekanntes Dokument in der Reihenfolge entdeckt",
+            )
+        document.sort_index = position
+        db.add(document)
+    db.commit()
+    db.refresh(trip)
+    db.expire(trip, ["documents"])
+    _ = trip.documents  # force reload with updated order
+    return trip
+
+
 def delete_travel_document(db: Session, trip_id: int, document_id: int) -> None:
     document = _get_travel_document(db, trip_id, document_id)
     stored_path = Path(document.stored_path)
@@ -2009,7 +2046,11 @@ def _collect_travel_dataset_documents(db: Session, trip_id: int) -> Tuple[Travel
             TravelDocument.trip_id == trip.id,
             TravelDocument.document_type.in_(TRAVEL_DATASET_DOCUMENT_TYPES),
         )
-        .order_by(TravelDocument.created_at.asc(), TravelDocument.id.asc())
+        .order_by(
+            TravelDocument.sort_index.asc(),
+            TravelDocument.created_at.asc(),
+            TravelDocument.id.asc(),
+        )
         .all()
     )
     return trip, documents

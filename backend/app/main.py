@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import mimetypes
 from pathlib import Path
 from typing import Optional
 
@@ -33,6 +34,7 @@ from .schemas import (
     SubtrackCreateRequest,
     SubtrackResponse,
     TravelDocumentResponse,
+    TravelDocumentReorderRequest,
     TravelDocumentUpdateRequest,
     TravelLetterCreateRequest,
     TravelLetterPreviewResponse,
@@ -75,6 +77,7 @@ from .services import (
     list_travel_trips,
     pause_or_resume_session,
     range_day_summaries,
+    reorder_travel_documents,
     resolve_travel_document_path,
     set_calendar_participation,
     start_session,
@@ -93,6 +96,7 @@ def _apply_sqlite_migrations() -> None:
     inspector = inspect(engine)
     columns = {column["name"] for column in inspector.get_columns("travel_documents")}
     statements: list[str] = []
+    needs_sort_index_backfill = False
     if "collection_label" not in columns:
         statements.append("ALTER TABLE travel_documents ADD COLUMN collection_label VARCHAR(120)")
     if "linked_invoice_id" not in columns:
@@ -100,10 +104,38 @@ def _apply_sqlite_migrations() -> None:
         statements.append(
             "CREATE INDEX IF NOT EXISTS ix_travel_documents_linked_invoice_id ON travel_documents (linked_invoice_id)"
         )
+    if "sort_index" not in columns:
+        statements.append(
+            "ALTER TABLE travel_documents ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0"
+        )
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS ix_travel_documents_trip_sort_index ON travel_documents (trip_id, sort_index)"
+        )
+        needs_sort_index_backfill = True
     if statements:
         with engine.begin() as connection:
             for statement in statements:
                 connection.execute(text(statement))
+        if needs_sort_index_backfill:
+            with engine.begin() as connection:
+                result = connection.execute(
+                    text(
+                        "SELECT id, trip_id FROM travel_documents ORDER BY trip_id, created_at, id"
+                    )
+                )
+                current_trip_id: int | None = None
+                position = 0
+                for doc_id, trip_id in result:
+                    if current_trip_id != trip_id:
+                        current_trip_id = trip_id
+                        position = 0
+                    connection.execute(
+                        text(
+                            "UPDATE travel_documents SET sort_index = :position WHERE id = :document_id"
+                        ),
+                        {"position": position, "document_id": doc_id},
+                    )
+                    position += 1
 
 
 models.Base.metadata.create_all(bind=engine)
@@ -406,6 +438,19 @@ def modify_travel_document(
     return document
 
 
+@app.post(
+    "/travels/{trip_id}/documents/reorder",
+    response_model=TravelTripResponse,
+)
+def reorder_trip_documents(
+    trip_id: int,
+    payload: TravelDocumentReorderRequest,
+    db: Session = Depends(get_db),
+) -> TravelTripResponse:
+    trip = reorder_travel_documents(db, trip_id, payload.order)
+    return trip
+
+
 @app.delete("/travels/{trip_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_travel_document(trip_id: int, document_id: int, db: Session = Depends(get_db)) -> Response:
     delete_travel_document(db, trip_id, document_id)
@@ -420,6 +465,18 @@ def download_travel_document(
 ) -> Response:
     document, path = resolve_travel_document_path(db, trip_id, document_id)
     return FileResponse(path, filename=document.original_name)
+
+
+@app.get("/travels/{trip_id}/documents/{document_id}/open")
+def open_travel_document(
+    trip_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> Response:
+    document, path = resolve_travel_document_path(db, trip_id, document_id)
+    media_type, _ = mimetypes.guess_type(document.original_name)
+    headers = {"Content-Disposition": f'inline; filename="{document.original_name}"'}
+    return FileResponse(path, media_type=media_type or "application/octet-stream", headers=headers)
 
 
 @app.get("/travels/{trip_id}/reisekostenpaket")

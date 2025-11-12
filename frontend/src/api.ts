@@ -81,8 +81,10 @@ export interface TravelDocument {
   collection_label: string | null
   linked_invoice_id: number | null
   linked_invoice: TravelInvoiceReference | null
+  sort_index: number
   created_at: string
   download_path: string
+  open_path: string
 }
 
 export interface TravelTrip {
@@ -448,12 +450,21 @@ export async function updateTravelDocument(
   return response.data
 }
 
+export async function reorderTravelDocuments(tripId: number, order: number[]) {
+  const response = await client.post<TravelTrip>(`/travels/${tripId}/documents/reorder`, { order })
+  return response.data
+}
+
 export async function deleteTravelDocument(tripId: number, documentId: number) {
   await client.delete(`/travels/${tripId}/documents/${documentId}`)
 }
 
 export function travelDocumentDownloadUrl(tripId: number, documentId: number) {
   return `${API_BASE}/travels/${tripId}/documents/${documentId}/download`
+}
+
+export function travelDocumentOpenUrl(tripId: number, documentId: number) {
+  return `${API_BASE}/travels/${tripId}/documents/${documentId}/open`
 }
 
 export function travelDatasetDownloadUrl(datasetPath: string) {

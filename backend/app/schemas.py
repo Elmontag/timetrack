@@ -318,6 +318,7 @@ class TravelDocumentResponse(BaseModel):
     collection_label: Optional[str] = None
     linked_invoice_id: Optional[int] = None
     linked_invoice: Optional[TravelInvoiceReference] = None
+    sort_index: int
     created_at: dt.datetime
 
     @model_serializer(mode="plain", when_used="json")
@@ -332,8 +333,10 @@ class TravelDocumentResponse(BaseModel):
             "collection_label": self.collection_label,
             "linked_invoice_id": self.linked_invoice_id,
             "linked_invoice": self.linked_invoice._serialize() if self.linked_invoice else None,
+            "sort_index": self.sort_index,
             "created_at": _serialize_datetime(self.created_at),
             "download_path": f"/travels/{self.trip_id}/documents/{self.id}/download",
+            "open_path": f"/travels/{self.trip_id}/documents/{self.id}/open",
         }
 
 
@@ -408,6 +411,17 @@ class TravelDocumentUpdateRequest(BaseModel):
     signed: Optional[bool] = None
     collection_label: Optional[str] = None
     linked_invoice_id: Optional[int] = None
+
+
+class TravelDocumentReorderRequest(BaseModel):
+    order: List[int]
+
+    @model_validator(mode="after")
+    def _validate_order(self) -> "TravelDocumentReorderRequest":
+        unique_ids = set(self.order)
+        if not self.order or len(unique_ids) != len(self.order):
+            raise ValueError("Die Reihenfolge muss eindeutige Dokument-IDs enthalten")
+        return self
 
 
 class TravelContact(BaseModel):

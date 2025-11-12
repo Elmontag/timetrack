@@ -174,7 +174,7 @@ class TravelTrip(Base):
         "TravelDocument",
         back_populates="trip",
         cascade="all, delete-orphan",
-        order_by="TravelDocument.created_at",
+        order_by="TravelDocument.sort_index, TravelDocument.created_at, TravelDocument.id",
     )
 
 
@@ -190,6 +190,7 @@ class TravelDocument(Base):
     signed = Column(Boolean, nullable=False, default=False)
     collection_label = Column(String(120), nullable=True)
     linked_invoice_id = Column(Integer, ForeignKey("travel_documents.id"), nullable=True, index=True)
+    sort_index = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     trip = relationship("TravelTrip", back_populates="documents")

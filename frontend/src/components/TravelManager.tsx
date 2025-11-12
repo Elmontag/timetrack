@@ -24,9 +24,11 @@ import {
   travelDatasetDownloadUrl,
   travelDatasetPrintUrl,
   travelDocumentDownloadUrl,
+  travelDocumentOpenUrl,
   updateTravel,
   updateTravelDocument,
   uploadTravelDocument,
+  reorderTravelDocuments,
 } from '../api'
 
 const WORKFLOW_STEPS = [
@@ -174,6 +176,8 @@ export function TravelManager() {
   const [letterError, setLetterError] = useState<string | null>(null)
   const [letterSubject, setLetterSubject] = useState('')
   const [letterBody, setLetterBody] = useState('')
+  const [draggedDocument, setDraggedDocument] = useState<{ tripId: number; documentId: number } | null>(null)
+  const [reorderingTripId, setReorderingTripId] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const draftIdCounter = useRef(0)
 
@@ -323,7 +327,16 @@ export function TravelManager() {
     setGlobalError(null)
     try {
       const data = await listTravels()
-      setTrips(data)
+      const normalized = data.map((trip) => ({
+        ...trip,
+        documents: [...trip.documents].sort((a, b) => {
+          if (a.sort_index !== b.sort_index) {
+            return a.sort_index - b.sort_index
+          }
+          return dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf()
+        }),
+      }))
+      setTrips(normalized)
       setExpandedTrips((prev) => prev.filter((id) => data.some((trip) => trip.id === id)))
       const invoiceIds = data.flatMap((trip) =>
         trip.documents
@@ -752,18 +765,122 @@ export function TravelManager() {
     }
   }
 
+  const handleDocumentDragStart = useCallback(
+    (event: DragEvent<HTMLElement>, tripId: number, documentId: number) => {
+      if (reorderingTripId !== null) {
+        event.preventDefault()
+        return
+      }
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('text/plain', String(documentId))
+      setDraggedDocument({ tripId, documentId })
+    },
+    [reorderingTripId],
+  )
+
+  const handleDocumentDragEnd = useCallback(() => {
+    setDraggedDocument(null)
+  }, [])
+
+  const handleDocumentDragOver = useCallback(
+    (event: DragEvent<HTMLElement>, tripId: number) => {
+      if (!draggedDocument || draggedDocument.tripId !== tripId) {
+        return
+      }
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+    },
+    [draggedDocument],
+  )
+
+  const handleDocumentDrop = useCallback(
+    async (event: DragEvent<HTMLElement>, tripId: number, targetDocumentId: number) => {
+      if (!draggedDocument || draggedDocument.tripId !== tripId) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      const sourceDocumentId = draggedDocument.documentId
+      setDraggedDocument(null)
+      if (sourceDocumentId === targetDocumentId) {
+        return
+      }
+      const trip = trips.find((item) => item.id === tripId)
+      if (!trip) {
+        return
+      }
+      const documents = [...trip.documents]
+      const fromIndex = documents.findIndex((doc) => doc.id === sourceDocumentId)
+      const targetIndex = documents.findIndex((doc) => doc.id === targetDocumentId)
+      if (fromIndex === -1 || targetIndex === -1) {
+        return
+      }
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+      const shouldPlaceAfter = event.clientY - rect.top > rect.height / 2
+      const [moved] = documents.splice(fromIndex, 1)
+      let adjustedTargetIndex = targetIndex
+      if (fromIndex < targetIndex) {
+        adjustedTargetIndex -= 1
+      }
+      if (shouldPlaceAfter) {
+        adjustedTargetIndex += 1
+      }
+      if (adjustedTargetIndex < 0) {
+        adjustedTargetIndex = 0
+      }
+      if (adjustedTargetIndex > documents.length) {
+        adjustedTargetIndex = documents.length
+      }
+      documents.splice(adjustedTargetIndex, 0, moved)
+      const reorderedDocs = documents.map((doc, index) => ({ ...doc, sort_index: index }))
+      const orderedIds = reorderedDocs.map((doc) => doc.id)
+      setTrips((prev) =>
+        prev.map((item) => (item.id === tripId ? { ...item, documents: reorderedDocs } : item)),
+      )
+      setReorderingTripId(tripId)
+      setGlobalError(null)
+      try {
+        const updatedTrip = await reorderTravelDocuments(tripId, orderedIds)
+        const normalizedTrip = {
+          ...updatedTrip,
+          documents: [...updatedTrip.documents].sort((a, b) => {
+            if (a.sort_index !== b.sort_index) {
+              return a.sort_index - b.sort_index
+            }
+            return dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf()
+          }),
+        }
+        setTrips((prev) =>
+          prev.map((item) => (item.id === tripId ? normalizedTrip : item)),
+        )
+      } catch (error) {
+        console.error('Dokumente konnten nicht neu angeordnet werden', error)
+        setGlobalError('Dokumente konnten nicht neu angeordnet werden.')
+        await loadTrips()
+      } finally {
+        setReorderingTripId(null)
+      }
+    },
+    [draggedDocument, loadTrips, trips],
+  )
+
   const renderDocumentCard = (
     trip: TravelTrip,
     document: TravelDocument,
-    options: { nested?: boolean } = {},
+    options: { nested?: boolean; receipts?: TravelDocument[] } = {},
   ) => {
     const isNested = options.nested ?? false
+    const receipts = options.receipts ?? []
     const isSignable = SIGNABLE_TYPES.has(document.document_type)
     const isUpdating = updatingDocId === document.id
     const linkedInfo =
       document.linked_invoice && document.document_type !== 'Rechnung' && !isNested
         ? `Rechnung: ${document.linked_invoice.original_name}`
         : null
+    const isDragging = draggedDocument?.documentId === document.id
+    const isPdfDocument = document.original_name.toLowerCase().endsWith('.pdf')
+    const isCollectionExpanded = receipts.length > 0 && expandedCollections.includes(document.id)
+    const isReordering = reorderingTripId === trip.id
 
     return (
       <div
@@ -771,7 +888,13 @@ export function TravelManager() {
         className={clsx(
           'rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3',
           isNested && 'ml-4 border-slate-800/70 bg-slate-950/40',
+          (isDragging || isReordering) && 'opacity-70',
         )}
+        draggable={!isReordering}
+        onDragStart={(event) => handleDocumentDragStart(event, trip.id, document.id)}
+        onDragOver={(event) => handleDocumentDragOver(event, trip.id)}
+        onDrop={(event) => handleDocumentDrop(event, trip.id, document.id)}
+        onDragEnd={handleDocumentDragEnd}
       >
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -804,6 +927,21 @@ export function TravelManager() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            {isPdfDocument && (
+              <button
+                type="button"
+                onClick={() =>
+                  window.open(
+                    travelDocumentOpenUrl(trip.id, document.id),
+                    '_blank',
+                    'noopener,noreferrer',
+                  )
+                }
+                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+              >
+                Öffnen
+              </button>
+            )}
             <a
               href={travelDocumentDownloadUrl(trip.id, document.id)}
               className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
@@ -870,6 +1008,47 @@ export function TravelManager() {
             </button>
           </div>
         </div>
+        {receipts.length > 0 && (
+          <div className="mt-3 rounded-lg border border-slate-800/70 bg-slate-950/40 p-2">
+            <button
+              type="button"
+              onClick={() => toggleCollection(document.id)}
+              className="flex w-full items-center justify-between gap-2 text-xs font-medium text-slate-200"
+              aria-expanded={isCollectionExpanded}
+            >
+              <span>
+                {document.collection_label
+                  ? `${document.collection_label} (${receipts.length} ${receipts.length === 1 ? 'Beleg' : 'Belege'})`
+                  : `Verknüpfte Belege (${receipts.length})`}
+              </span>
+              <svg
+                className={clsx(
+                  'h-4 w-4 text-slate-400 transition-transform',
+                  isCollectionExpanded && 'rotate-180',
+                )}
+                viewBox="0 0 20 20"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                <path
+                  d="M5 8l5 5 5-5"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            {isCollectionExpanded && (
+              <div className="mt-2 space-y-2">
+                {receipts.map((receipt) =>
+                  renderDocumentCard(trip, receipt, { nested: true }),
+                )}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     )
   }
@@ -885,17 +1064,26 @@ export function TravelManager() {
     const nextStep =
       statusIndex < WORKFLOW_STEPS.length - 1 ? WORKFLOW_STEPS[statusIndex + 1] : null
 
-    const receiptsByInvoice = new Map<number, TravelDocument[]>()
+    const isReorderingDocuments = reorderingTripId === trip.id
+    const renderedDocuments: ReactNode[] = []
+    const handledIds = new Set<number>()
     for (const document of trip.documents) {
-      if (document.document_type === 'Beleg' && document.linked_invoice_id) {
-        const existing = receiptsByInvoice.get(document.linked_invoice_id) ?? []
-        existing.push(document)
-        receiptsByInvoice.set(document.linked_invoice_id, existing)
+      if (handledIds.has(document.id)) {
+        continue
       }
+      if (document.document_type === 'Beleg' && document.linked_invoice_id) {
+        continue
+      }
+      let receipts: TravelDocument[] = []
+      if (document.document_type === 'Rechnung') {
+        receipts = trip.documents.filter((item) => item.linked_invoice_id === document.id)
+        for (const receipt of receipts) {
+          handledIds.add(receipt.id)
+        }
+      }
+      handledIds.add(document.id)
+      renderedDocuments.push(renderDocumentCard(trip, document, { receipts }))
     }
-    receiptsByInvoice.forEach((documents) => {
-      documents.sort((a, b) => dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf())
-    })
 
     return (
       <li
@@ -1084,65 +1272,11 @@ export function TravelManager() {
               {trip.documents.length === 0 ? (
                 <p className="mt-2 text-xs text-slate-500">Keine Dokumente vorhanden.</p>
               ) : (
-                <div className="mt-3 space-y-3">
-                  {trip.documents
-                    .filter((document) => document.document_type !== 'Beleg' || !document.linked_invoice_id)
-                    .map((document) => {
-                      if (document.document_type === 'Rechnung') {
-                        const receipts = receiptsByInvoice.get(document.id) ?? []
-                        const hasReceipts = receipts.length > 0
-                        const isCollectionExpanded = expandedCollections.includes(document.id)
-                        return (
-                          <div key={`invoice-block-${document.id}`} className="space-y-2">
-                            {renderDocumentCard(trip, document)}
-                            {hasReceipts && (
-                              <div className="ml-1 rounded-lg border border-slate-800/60 bg-slate-950/40 p-2">
-                                <button
-                                  type="button"
-                                  onClick={() => toggleCollection(document.id)}
-                                  className="flex w-full items-center justify-between gap-2 text-xs font-medium text-slate-200"
-                                  aria-expanded={isCollectionExpanded}
-                                >
-                                  <span>
-                                    {document.collection_label
-                                      ? `${document.collection_label} (${receipts.length} ${
-                                          receipts.length === 1 ? 'Beleg' : 'Belege'
-                                        })`
-                                      : `Verknüpfte Belege (${receipts.length})`}
-                                  </span>
-                                  <svg
-                                    className={clsx(
-                                      'h-4 w-4 text-slate-400 transition-transform',
-                                      isCollectionExpanded && 'rotate-180',
-                                    )}
-                                    viewBox="0 0 20 20"
-                                    fill="none"
-                                    xmlns="http://www.w3.org/2000/svg"
-                                    aria-hidden="true"
-                                  >
-                                    <path
-                                      d="M5 8l5 5 5-5"
-                                      stroke="currentColor"
-                                      strokeWidth={1.5}
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                    />
-                                  </svg>
-                                </button>
-                                {isCollectionExpanded && (
-                                  <div className="mt-2 space-y-2">
-                                    {receipts.map((receipt) =>
-                                      renderDocumentCard(trip, receipt, { nested: true }),
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )
-                      }
-                      return renderDocumentCard(trip, document)
-                    })}
+                <div className="relative mt-3 space-y-3">
+                  {isReorderingDocuments && (
+                    <div className="absolute inset-0 cursor-progress rounded-lg border border-slate-800/60 bg-slate-950/40 backdrop-blur-sm" />
+                  )}
+                  {renderedDocuments.map((card) => card)}
                 </div>
               )}
             </div>
