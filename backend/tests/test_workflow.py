@@ -278,11 +278,14 @@ def test_task_creation(client: TestClient):
     assert create_resp.status_code == 201
     subtrack = create_resp.json()
     assert subtrack["title"] == "Kundentermin"
+    assert subtrack["status"] == "completed"
+    assert subtrack["total_seconds"] == 3600
+    assert subtrack["paused_duration"] == 0
 
     list_resp = client.get("/work/subtracks/2024-04-01")
     assert list_resp.status_code == 200
     items = list_resp.json()
-    assert any(item["title"] == "Kundentermin" for item in items)
+    assert any(item["title"] == "Kundentermin" and item["status"] == "completed" for item in items)
 
     sessions_resp = client.get("/work/day/2024-04-01")
     assert sessions_resp.status_code == 200
@@ -318,9 +321,104 @@ def test_task_update_and_delete(client: TestClient):
     updated = update_resp.json()
     assert updated["title"] == "Daily Updated"
     assert updated["tags"] == ["team"]
+    assert updated["status"] == "completed"
+    assert updated["total_seconds"] == 2700
 
     delete_resp = client.delete(f"/work/subtracks/{subtrack_id}")
     assert delete_resp.status_code == 204
+
+
+def test_task_timer_actions(client: TestClient):
+    day = dt.date(2024, 5, 1)
+    create_resp = client.post(
+        "/work/subtracks",
+        json={"day": day.isoformat(), "title": "Dokumentation"},
+    )
+    assert create_resp.status_code == 201
+    subtrack_id = create_resp.json()["id"]
+
+    start_at = dt.datetime(2024, 5, 1, 8, 0, tzinfo=dt.timezone.utc)
+    pause_at = dt.datetime(2024, 5, 1, 8, 30, tzinfo=dt.timezone.utc)
+    resume_at = dt.datetime(2024, 5, 1, 8, 45, tzinfo=dt.timezone.utc)
+    stop_at = dt.datetime(2024, 5, 1, 9, 15, tzinfo=dt.timezone.utc)
+
+    start_resp = client.post(
+        f"/work/subtracks/{subtrack_id}/start",
+        json={"timestamp": start_at.isoformat()},
+    )
+    assert start_resp.status_code == 200
+    started = start_resp.json()
+    assert started["status"] == "active"
+    assert started["start_time"].startswith("2024-05-01T08:00")
+
+    pause_resp = client.post(
+        f"/work/subtracks/{subtrack_id}/pause",
+        json={"timestamp": pause_at.isoformat()},
+    )
+    assert pause_resp.status_code == 200
+    paused = pause_resp.json()
+    assert paused["status"] == "paused"
+    assert paused["last_pause_start"].startswith("2024-05-01T08:30")
+
+    resume_resp = client.post(
+        f"/work/subtracks/{subtrack_id}/start",
+        json={"timestamp": resume_at.isoformat()},
+    )
+    assert resume_resp.status_code == 200
+    resumed = resume_resp.json()
+    assert resumed["status"] == "active"
+    assert resumed["paused_duration"] == 900
+
+    stop_resp = client.post(
+        f"/work/subtracks/{subtrack_id}/stop",
+        json={"timestamp": stop_at.isoformat()},
+    )
+    assert stop_resp.status_code == 200
+    stopped = stop_resp.json()
+    assert stopped["status"] == "completed"
+    assert stopped["total_seconds"] == 3600
+    assert stopped["paused_duration"] == 900
+    assert stopped["end_time"].startswith("2024-05-01T09:15")
+
+
+def test_task_respects_session_pause_and_stop(client: TestClient):
+    start_resp = client.post("/work/start", json={"comment": "Feature"})
+    assert start_resp.status_code == 201
+    day = dt.date.fromisoformat(start_resp.json()["start_time"].split("T")[0])
+
+    task_resp = client.post(
+        "/work/subtracks",
+        json={"day": day.isoformat(), "title": "Review"},
+    )
+    assert task_resp.status_code == 201
+    task_id = task_resp.json()["id"]
+
+    active_resp = client.post(f"/work/subtracks/{task_id}/start")
+    assert active_resp.status_code == 200
+    assert active_resp.json()["status"] == "active"
+
+    pause_session = client.post("/work/pause")
+    assert pause_session.status_code == 200
+    assert pause_session.json()["action"] == "paused"
+
+    paused_task = client.get(f"/work/subtracks/{day.isoformat()}").json()[0]
+    assert paused_task["status"] == "paused"
+    assert paused_task["last_pause_start"] is not None
+
+    resume_session = client.post("/work/pause")
+    assert resume_session.status_code == 200
+    assert resume_session.json()["action"] == "resumed"
+
+    resume_task = client.post(f"/work/subtracks/{task_id}/start")
+    assert resume_task.status_code == 200
+    assert resume_task.json()["status"] == "active"
+
+    stop_session = client.post("/work/stop", json={})
+    assert stop_session.status_code == 200
+
+    final_task = client.get(f"/work/subtracks/{day.isoformat()}").json()[0]
+    assert final_task["status"] == "completed"
+    assert final_task["end_time"] is not None
 
 
 def test_calendar_event_participation(client: TestClient):

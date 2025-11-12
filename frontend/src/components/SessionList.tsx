@@ -11,6 +11,9 @@ import {
   createTask,
   updateTask,
   deleteTask,
+  startTaskTimer,
+  pauseTaskTimer,
+  stopTaskTimer,
 } from '../api'
 import { formatSeconds } from '../utils/timeFormat'
 import { TaskEditorModal, TaskFormValues } from './TaskEditorModal'
@@ -65,6 +68,20 @@ function normalizeTags(value: string): string[] {
     .filter((tag) => tag.length > 0)
 }
 
+const TASK_STATUS_LABELS: Record<Task['status'], string> = {
+  planned: 'Geplant',
+  active: 'Laufend',
+  paused: 'Pausiert',
+  completed: 'Abgeschlossen',
+}
+
+const TASK_STATUS_STYLES: Record<Task['status'], string> = {
+  planned: 'border border-slate-700 bg-slate-900 text-slate-200',
+  active: 'border border-emerald-500/40 bg-emerald-500/15 text-emerald-200',
+  paused: 'border border-amber-500/40 bg-amber-500/15 text-amber-200',
+  completed: 'border border-slate-700 bg-slate-900 text-slate-300',
+}
+
 export function SessionList({
   refreshKey,
   timeDisplayFormat,
@@ -86,10 +103,18 @@ export function SessionList({
   const [taskModalState, setTaskModalState] = useState<TaskModalState | null>(null)
   const [taskModalSubmitting, setTaskModalSubmitting] = useState(false)
   const [taskModalError, setTaskModalError] = useState<string | null>(null)
-  const [taskStartLoadingId, setTaskStartLoadingId] = useState<number | null>(null)
+  const [taskActionLoading, setTaskActionLoading] = useState<
+    { id: number; action: 'start' | 'pause' | 'stop' | 'delete' } | null
+  >(null)
   const [sessionControlLoading, setSessionControlLoading] = useState<SessionControl>(null)
+  const [now, setNow] = useState(() => dayjs())
 
   const isToday = dayjs().isSame(dayjs(day), 'day')
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(dayjs()), 15000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   const loadData = useCallback(async () => {
     setLoading(true)
@@ -123,6 +148,37 @@ export function SessionList({
         includeUnit: timeDisplayFormat === 'decimal',
       }),
     [timeDisplayFormat],
+  )
+
+  const computeTaskSeconds = useCallback(
+    (task: Task) => {
+      if (!task.start_time) {
+        return 0
+      }
+      if (task.status === 'completed') {
+        return task.total_seconds ?? 0
+      }
+      const start = dayjs(task.start_time)
+      const effectiveEnd =
+        task.status === 'paused' && task.last_pause_start ? dayjs(task.last_pause_start) : now
+      const rawSeconds = effectiveEnd.diff(start, 'second')
+      const total = rawSeconds - task.paused_duration
+      return total > 0 ? total : 0
+    },
+    [now],
+  )
+
+  const formatTaskDuration = useCallback(
+    (task: Task) =>
+      formatSeconds(
+        task.status === 'completed' ? task.total_seconds : computeTaskSeconds(task),
+        timeDisplayFormat,
+        {
+          decimalPlaces: timeDisplayFormat === 'decimal' ? 2 : undefined,
+          includeUnit: timeDisplayFormat === 'decimal',
+        },
+      ),
+    [computeTaskSeconds, timeDisplayFormat],
   )
 
   const handleDateChange = (value: string) => {
@@ -303,7 +359,7 @@ export function SessionList({
     if (!window.confirm(`Aufgabe „${task.title}“ wirklich löschen?`)) {
       return
     }
-    setTaskStartLoadingId(task.id)
+    setTaskActionLoading({ id: task.id, action: 'delete' })
     setError(null)
     try {
       await deleteTask(task.id)
@@ -312,31 +368,61 @@ export function SessionList({
       const detail = err?.response?.data?.detail
       setError(typeof detail === 'string' ? detail : 'Aufgabe konnte nicht gelöscht werden.')
     } finally {
-      setTaskStartLoadingId(null)
+      setTaskActionLoading(null)
     }
   }
 
-  const handleTaskStart = async (task: Task) => {
-    if (activeSession) {
-      setError('Es läuft bereits eine Zeiterfassung.')
-      return
-    }
+  const handleTaskActivate = async (task: Task) => {
     if (!isToday) {
       setError('Aufgaben können nur für den aktuellen Tag gestartet werden.')
       return
     }
-    setTaskStartLoadingId(task.id)
+    setTaskActionLoading({ id: task.id, action: 'start' })
     setError(null)
     try {
-      await onSessionStart({ comment: task.title })
-      const nowIso = dayjs().toISOString()
-      await updateTask(task.id, { day, start_time: nowIso })
+      await startTaskTimer(task.id)
       await loadData()
     } catch (err: any) {
       const detail = err?.response?.data?.detail
       setError(typeof detail === 'string' ? detail : 'Starten fehlgeschlagen.')
     } finally {
-      setTaskStartLoadingId(null)
+      setTaskActionLoading(null)
+    }
+  }
+
+  const handleTaskPause = async (task: Task) => {
+    if (!isToday) {
+      setError('Aufgaben können nur für den aktuellen Tag pausiert werden.')
+      return
+    }
+    setTaskActionLoading({ id: task.id, action: 'pause' })
+    setError(null)
+    try {
+      await pauseTaskTimer(task.id)
+      await loadData()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : 'Pausieren fehlgeschlagen.')
+    } finally {
+      setTaskActionLoading(null)
+    }
+  }
+
+  const handleTaskStop = async (task: Task) => {
+    if (!isToday) {
+      setError('Aufgaben können nur für den aktuellen Tag gestoppt werden.')
+      return
+    }
+    setTaskActionLoading({ id: task.id, action: 'stop' })
+    setError(null)
+    try {
+      await stopTaskTimer(task.id)
+      await loadData()
+    } catch (err: any) {
+      const detail = err?.response?.data?.detail
+      setError(typeof detail === 'string' ? detail : 'Stoppen fehlgeschlagen.')
+    } finally {
+      setTaskActionLoading(null)
     }
   }
 
@@ -604,39 +690,77 @@ export function SessionList({
                             <p className="text-xs text-slate-500">Keine Aufgaben im Zeitfenster.</p>
                           )}
                           {tasksForSession.map((task) => {
-                            const isStarting = taskStartLoadingId === task.id
+                            const currentAction =
+                              taskActionLoading && taskActionLoading.id === task.id
+                                ? taskActionLoading.action
+                                : null
+                            const disableAll = currentAction !== null
+                            const showStartButton = task.status === 'planned' || task.status === 'paused'
+                            const showPauseButton = task.status === 'active'
+                            const showStopButton = task.status === 'active' || task.status === 'paused'
                             return (
                               <div key={task.id} className="rounded-md border border-slate-800 bg-slate-950/50 p-3">
-                                <div className="flex flex-wrap items-center justify-between gap-2">
-                                  <div>
-                                    <p className="text-sm font-medium text-slate-100">{task.title}</p>
+                                <div className="flex flex-wrap items-start justify-between gap-3">
+                                  <div className="space-y-1">
+                                    <div className="flex flex-wrap items-center gap-2">
+                                      <p className="text-sm font-medium text-slate-100">{task.title}</p>
+                                      <span
+                                        className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${TASK_STATUS_STYLES[task.status]}`}
+                                      >
+                                        {TASK_STATUS_LABELS[task.status]}
+                                      </span>
+                                    </div>
                                     <p className="text-xs text-slate-400">
                                       {task.start_time ? dayjs(task.start_time).format('HH:mm') : '—'} –{' '}
                                       {task.end_time ? dayjs(task.end_time).format('HH:mm') : '—'}
                                     </p>
+                                    <p className="text-xs font-mono text-slate-300">
+                                      Investiert: {formatTaskDuration(task)}
+                                    </p>
                                   </div>
-                                  <div className="flex flex-wrap gap-2">
-                                    {!task.start_time && (
+                                  <div className="flex flex-wrap justify-end gap-2">
+                                    {showStartButton && (
                                       <button
                                         type="button"
-                                        onClick={() => handleTaskStart(task)}
-                                        disabled={isStarting}
+                                        onClick={() => handleTaskActivate(task)}
+                                        disabled={disableAll}
                                         className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-slate-950 transition hover:bg-sky-400/90 disabled:opacity-60"
                                       >
-                                        Starten
+                                        {task.status === 'paused' ? 'Fortsetzen' : 'Starten'}
+                                      </button>
+                                    )}
+                                    {showPauseButton && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleTaskPause(task)}
+                                        disabled={disableAll}
+                                        className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-800 disabled:opacity-60"
+                                      >
+                                        Pausieren
+                                      </button>
+                                    )}
+                                    {showStopButton && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleTaskStop(task)}
+                                        disabled={disableAll}
+                                        className="inline-flex items-center rounded-md border border-rose-600 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-600/20 disabled:opacity-60"
+                                      >
+                                        Stoppen
                                       </button>
                                     )}
                                     <button
                                       type="button"
                                       onClick={() => openEditTask(task)}
-                                      className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-800"
+                                      disabled={disableAll}
+                                      className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-800 disabled:opacity-60"
                                     >
                                       Bearbeiten
                                     </button>
                                     <button
                                       type="button"
                                       onClick={() => handleTaskDelete(task)}
-                                      disabled={isStarting}
+                                      disabled={disableAll}
                                       className="inline-flex items-center rounded-md border border-rose-600 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-600/20 disabled:opacity-60"
                                     >
                                       Löschen
@@ -718,39 +842,73 @@ export function SessionList({
             <p className="text-xs text-slate-500">Diese Aufgaben konnten keinem Arbeitszeitfenster zugeordnet werden.</p>
             <div className="mt-3 space-y-2">
               {tasksBySession.unassigned.map((task) => {
-                const isStarting = taskStartLoadingId === task.id
+                const currentAction =
+                  taskActionLoading && taskActionLoading.id === task.id ? taskActionLoading.action : null
+                const disableAll = currentAction !== null
+                const showStartButton = task.status === 'planned' || task.status === 'paused'
+                const showPauseButton = task.status === 'active'
+                const showStopButton = task.status === 'active' || task.status === 'paused'
                 return (
                   <div key={task.id} className="rounded-md border border-slate-800 bg-slate-950/50 p-3">
-                    <div className="flex flex-wrap items-center justify-between gap-2">
-                      <div>
-                        <p className="text-sm font-medium text-slate-100">{task.title}</p>
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <p className="text-sm font-medium text-slate-100">{task.title}</p>
+                          <span
+                            className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide ${TASK_STATUS_STYLES[task.status]}`}
+                          >
+                            {TASK_STATUS_LABELS[task.status]}
+                          </span>
+                        </div>
                         <p className="text-xs text-slate-400">
                           {task.start_time ? dayjs(task.start_time).format('HH:mm') : '—'} –{' '}
                           {task.end_time ? dayjs(task.end_time).format('HH:mm') : '—'}
                         </p>
+                        <p className="text-xs font-mono text-slate-300">Investiert: {formatTaskDuration(task)}</p>
                       </div>
-                      <div className="flex flex-wrap gap-2">
-                        {!task.start_time && (
+                      <div className="flex flex-wrap justify-end gap-2">
+                        {showStartButton && (
                           <button
                             type="button"
-                            onClick={() => handleTaskStart(task)}
-                            disabled={isStarting}
+                            onClick={() => handleTaskActivate(task)}
+                            disabled={disableAll}
                             className="inline-flex items-center rounded-md bg-primary px-3 py-1.5 text-xs font-semibold text-slate-950 transition hover:bg-sky-400/90 disabled:opacity-60"
                           >
-                            Starten
+                            {task.status === 'paused' ? 'Fortsetzen' : 'Starten'}
+                          </button>
+                        )}
+                        {showPauseButton && (
+                          <button
+                            type="button"
+                            onClick={() => handleTaskPause(task)}
+                            disabled={disableAll}
+                            className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-800 disabled:opacity-60"
+                          >
+                            Pausieren
+                          </button>
+                        )}
+                        {showStopButton && (
+                          <button
+                            type="button"
+                            onClick={() => handleTaskStop(task)}
+                            disabled={disableAll}
+                            className="inline-flex items-center rounded-md border border-rose-600 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-600/20 disabled:opacity-60"
+                          >
+                            Stoppen
                           </button>
                         )}
                         <button
                           type="button"
                           onClick={() => openEditTask(task)}
-                          className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-800"
+                          disabled={disableAll}
+                          className="inline-flex items-center rounded-md border border-slate-700 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-slate-800 disabled:opacity-60"
                         >
                           Bearbeiten
                         </button>
                         <button
                           type="button"
                           onClick={() => handleTaskDelete(task)}
-                          disabled={isStarting}
+                          disabled={disableAll}
                           className="inline-flex items-center rounded-md border border-rose-600 px-3 py-1.5 text-xs font-semibold text-rose-300 transition hover:bg-rose-600/20 disabled:opacity-60"
                         >
                           Löschen

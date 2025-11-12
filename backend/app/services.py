@@ -8,7 +8,7 @@ import uuid
 import zipfile
 from collections import defaultdict
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple, Literal
 
 from zoneinfo import ZoneInfo
 
@@ -604,8 +604,10 @@ def pause_or_resume_session(db: Session) -> WorkSession:
     else:
         session.mark_paused(now)
         action = "paused"
-        day = _from_db_datetime(session.start_time).astimezone(LOCAL_TZ).date()
-        _close_open_subtracks(db, day, now)
+        start_local = _from_db_datetime(session.start_time).astimezone(LOCAL_TZ)
+        local_day = start_local.date()
+        utc_day = _from_db_datetime(session.start_time).date()
+        _close_open_subtracks(db, {local_day, utc_day}, now, mode="pause")
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -621,8 +623,10 @@ def stop_session(db: Session, state: RuntimeState, comment: Optional[str] = None
     if comment:
         session.comment = comment
     session.mark_stopped(now)
-    day = _from_db_datetime(session.start_time).astimezone(LOCAL_TZ).date()
-    _close_open_subtracks(db, day, now)
+    start_local = _from_db_datetime(session.start_time).astimezone(LOCAL_TZ)
+    local_day = start_local.date()
+    utc_day = _from_db_datetime(session.start_time).date()
+    _close_open_subtracks(db, {local_day, utc_day}, now, mode="stop")
     db.add(session)
     db.commit()
     db.refresh(session)
@@ -716,28 +720,115 @@ def _raise_if_session_overlaps(
         )
 
 
-def _close_open_subtracks(db: Session, day: dt.date, end_time: dt.datetime) -> None:
-    end_utc = _ensure_utc(end_time)
+def _reset_subtrack_progress(subtrack: WorkSubtrack) -> None:
+    subtrack.status = "planned"
+    subtrack.paused_duration = 0
+    subtrack.last_pause_start = None
+    subtrack.total_seconds = 0
+
+
+def _activate_subtrack(subtrack: WorkSubtrack, activation_time: dt.datetime) -> None:
+    activation_utc = _ensure_utc(activation_time)
+    if subtrack.status == "completed":
+        return
+    if subtrack.status == "paused" and subtrack.last_pause_start:
+        pause_start = _from_db_datetime(subtrack.last_pause_start)
+        if pause_start:
+            delta = activation_utc - pause_start
+            if delta.total_seconds() > 0:
+                accumulated = subtrack.paused_duration or 0
+                subtrack.paused_duration = accumulated + int(delta.total_seconds())
+    if subtrack.status in {"planned"} or subtrack.start_time is None:
+        subtrack.start_time = activation_utc
+        subtrack.paused_duration = 0
+        subtrack.total_seconds = 0
+    subtrack.last_pause_start = None
+    subtrack.status = "active"
+
+
+def _pause_subtrack(subtrack: WorkSubtrack, pause_time: dt.datetime) -> None:
+    if subtrack.status != "active":
+        return
+    subtrack.last_pause_start = _ensure_utc(pause_time)
+    subtrack.status = "paused"
+
+
+def _complete_subtrack(subtrack: WorkSubtrack, completion_time: dt.datetime) -> None:
+    completion_utc = _ensure_utc(completion_time)
+    paused_total = subtrack.paused_duration or 0
+    if subtrack.status == "paused" and subtrack.last_pause_start:
+        pause_start = _from_db_datetime(subtrack.last_pause_start)
+        if pause_start:
+            delta = completion_utc - pause_start
+            if delta.total_seconds() > 0:
+                paused_total += int(delta.total_seconds())
+    subtrack.last_pause_start = None
+    if subtrack.start_time is None:
+        subtrack.start_time = completion_utc
+    current_end = _from_db_datetime(subtrack.end_time) if subtrack.end_time else None
+    end_utc = completion_utc
+    if current_end and current_end > completion_utc:
+        end_utc = current_end
+    subtrack.end_time = end_utc
+    start_utc = _from_db_datetime(subtrack.start_time) or end_utc
+    duration = end_utc - start_utc
+    subtrack.paused_duration = paused_total
+    effective = duration.total_seconds() - paused_total
+    subtrack.total_seconds = max(int(effective), 0)
+    subtrack.status = "completed"
+
+
+def _auto_progress_subtrack(subtrack: WorkSubtrack, now: dt.datetime) -> bool:
+    changed = False
+    now_utc = _ensure_utc(now)
+    start_utc = _from_db_datetime(subtrack.start_time)
+    end_utc = _from_db_datetime(subtrack.end_time)
+    if subtrack.status == "planned" and start_utc and start_utc <= now_utc:
+        _activate_subtrack(subtrack, start_utc)
+        changed = True
+    if subtrack.status in {"active", "paused"} and end_utc and end_utc <= now_utc:
+        _complete_subtrack(subtrack, end_utc)
+        changed = True
+    return changed
+
+
+def _close_open_subtracks(
+    db: Session, days: Iterable[dt.date], event_time: dt.datetime, *, mode: Literal["pause", "stop"]
+) -> None:
+    moment = _ensure_utc(event_time)
+    day_values = {value for value in days}
+    if not day_values:
+        return
     open_items = (
         db.query(WorkSubtrack)
         .filter(
-            WorkSubtrack.day == day,
-            WorkSubtrack.start_time.isnot(None),
-            WorkSubtrack.end_time.is_(None),
+            WorkSubtrack.day.in_(day_values),
+            WorkSubtrack.status.in_(["active", "paused"]),
         )
         .all()
     )
     for item in open_items:
-        item.end_time = end_utc
+        if mode == "pause":
+            if item.status == "active":
+                _pause_subtrack(item, moment)
+        else:
+            _complete_subtrack(item, moment)
         db.add(item)
 
 
 def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
     start, end = _day_bounds(day)
+    day_utc_start = dt.datetime.combine(day, dt.time.min, tzinfo=dt.timezone.utc)
+    day_utc_end = day_utc_start + dt.timedelta(days=1)
     sessions = (
         db.query(WorkSession)
         .options(selectinload(WorkSession.notes))
-        .filter(and_(WorkSession.start_time >= start, WorkSession.start_time < end))
+        .filter(
+            or_(
+                and_(WorkSession.start_time >= start, WorkSession.start_time < end),
+                and_(WorkSession.start_time >= day_utc_start, WorkSession.start_time < day_utc_end),
+            )
+        )
         .order_by(WorkSession.start_time.asc())
         .all()
     )
@@ -982,6 +1073,11 @@ def create_subtrack(
         tags=tags,
         note=note,
     )
+    now = _now()
+    if start_time_utc and start_time_utc <= now:
+        _activate_subtrack(subtrack, start_time_utc)
+    if subtrack.start_time and end_time_utc and end_time_utc <= now:
+        _complete_subtrack(subtrack, end_time_utc)
     db.add(subtrack)
     db.commit()
     db.refresh(subtrack)
@@ -989,12 +1085,23 @@ def create_subtrack(
 
 
 def list_subtracks(db: Session, day: dt.date) -> List[WorkSubtrack]:
-    return (
+    items = (
         db.query(WorkSubtrack)
         .filter(WorkSubtrack.day == day)
         .order_by(WorkSubtrack.start_time.asc(), WorkSubtrack.created_at.asc())
         .all()
     )
+    now = _now()
+    changed = False
+    for item in items:
+        if _auto_progress_subtrack(item, now):
+            db.add(item)
+            changed = True
+    if changed:
+        db.commit()
+        for item in items:
+            db.refresh(item)
+    return items
 
 
 def update_subtrack(
@@ -1011,12 +1118,15 @@ def update_subtrack(
         subtrack.day = changes["day"]
     if "title" in changes and changes["title"] is not None:
         subtrack.title = changes["title"]
+    timing_changed = False
     if "start_time" in changes:
         value = changes["start_time"]
         subtrack.start_time = _ensure_utc(value) if value else None
+        timing_changed = True
     if "end_time" in changes:
         value = changes["end_time"]
         subtrack.end_time = _ensure_utc(value) if value else None
+        timing_changed = True
     if "project" in changes:
         subtrack.project = changes["project"]
     if "tags" in changes and changes["tags"] is not None:
@@ -1024,6 +1134,81 @@ def update_subtrack(
     if "note" in changes:
         subtrack.note = changes["note"]
 
+    if subtrack.start_time and subtrack.end_time:
+        start_utc = _from_db_datetime(subtrack.start_time)
+        end_utc = _from_db_datetime(subtrack.end_time)
+        if end_utc <= start_utc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subtrack end must be after start")
+
+    if timing_changed:
+        if subtrack.start_time is None:
+            _reset_subtrack_progress(subtrack)
+        else:
+            _reset_subtrack_progress(subtrack)
+            now = _now()
+            if subtrack.end_time and _from_db_datetime(subtrack.end_time) <= now:
+                _complete_subtrack(subtrack, subtrack.end_time)
+            elif _from_db_datetime(subtrack.start_time) <= now:
+                _activate_subtrack(subtrack, subtrack.start_time)
+
+    db.add(subtrack)
+    db.commit()
+    db.refresh(subtrack)
+    return subtrack
+
+
+def start_subtrack(
+    db: Session,
+    subtrack_id: int,
+    timestamp: Optional[dt.datetime] = None,
+) -> WorkSubtrack:
+    subtrack = db.get(WorkSubtrack, subtrack_id)
+    if not subtrack:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subtrack not found")
+    if subtrack.status == "completed":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Subtrack is already completed")
+    moment = timestamp or _now()
+    _activate_subtrack(subtrack, moment)
+    end_utc = _from_db_datetime(subtrack.end_time)
+    moment_utc = _ensure_utc(moment)
+    if end_utc and end_utc <= moment_utc:
+        _complete_subtrack(subtrack, subtrack.end_time or moment)
+    db.add(subtrack)
+    db.commit()
+    db.refresh(subtrack)
+    return subtrack
+
+
+def pause_subtrack(
+    db: Session,
+    subtrack_id: int,
+    timestamp: Optional[dt.datetime] = None,
+) -> WorkSubtrack:
+    subtrack = db.get(WorkSubtrack, subtrack_id)
+    if not subtrack:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subtrack not found")
+    if subtrack.status != "active":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Subtrack is not active")
+    moment = timestamp or _now()
+    _pause_subtrack(subtrack, moment)
+    db.add(subtrack)
+    db.commit()
+    db.refresh(subtrack)
+    return subtrack
+
+
+def stop_subtrack(
+    db: Session,
+    subtrack_id: int,
+    timestamp: Optional[dt.datetime] = None,
+) -> WorkSubtrack:
+    subtrack = db.get(WorkSubtrack, subtrack_id)
+    if not subtrack:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subtrack not found")
+    if subtrack.status not in {"active", "paused"}:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Subtrack is not running")
+    moment = timestamp or _now()
+    _complete_subtrack(subtrack, moment)
     db.add(subtrack)
     db.commit()
     db.refresh(subtrack)

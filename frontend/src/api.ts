@@ -180,6 +180,10 @@ export interface Task {
   title: string
   start_time: string | null
   end_time: string | null
+  status: 'planned' | 'active' | 'paused' | 'completed'
+  total_seconds: number
+  paused_duration: number
+  last_pause_start: string | null
   project: string | null
   tags: string[]
   note: string | null
@@ -331,6 +335,21 @@ export async function updateTask(
 
 export async function deleteTask(taskId: number) {
   await client.delete(`/work/subtracks/${taskId}`)
+}
+
+export async function startTaskTimer(taskId: number, payload: { timestamp?: string } = {}) {
+  const response = await client.post<Task>(`/work/subtracks/${taskId}/start`, payload)
+  return response.data
+}
+
+export async function pauseTaskTimer(taskId: number, payload: { timestamp?: string } = {}) {
+  const response = await client.post<Task>(`/work/subtracks/${taskId}/pause`, payload)
+  return response.data
+}
+
+export async function stopTaskTimer(taskId: number, payload: { timestamp?: string } = {}) {
+  const response = await client.post<Task>(`/work/subtracks/${taskId}/stop`, payload)
+  return response.data
 }
 
 export async function createCalendarEvent(payload: {

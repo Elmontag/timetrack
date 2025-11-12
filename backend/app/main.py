@@ -33,6 +33,7 @@ from .schemas import (
     LeaveEntryResponse,
     SessionNoteCreateRequest,
     SessionNoteResponse,
+    SubtrackActionRequest,
     SubtrackCreateRequest,
     SubtrackUpdateRequest,
     SubtrackResponse,
@@ -86,9 +87,12 @@ from .services import (
     resolve_travel_document_path,
     set_calendar_participation,
     start_session,
+    start_subtrack,
     stop_session,
+    stop_subtrack,
     update_runtime_settings,
     update_session,
+    pause_subtrack,
     update_subtrack,
     update_travel_document,
     update_travel_trip,
@@ -265,6 +269,36 @@ def update_work_subtrack(
     state: RuntimeState = request.app.state.runtime_state
     changes = payload.model_dump(exclude_unset=True)
     subtrack = update_subtrack(db, state, subtrack_id, changes)
+    return subtrack
+
+
+@app.post("/work/subtracks/{subtrack_id}/start", response_model=SubtrackResponse)
+def start_work_subtrack(
+    subtrack_id: int,
+    payload: SubtrackActionRequest | None = None,
+    db: Session = Depends(get_db),
+) -> SubtrackResponse:
+    subtrack = start_subtrack(db, subtrack_id, payload.timestamp if payload else None)
+    return subtrack
+
+
+@app.post("/work/subtracks/{subtrack_id}/pause", response_model=SubtrackResponse)
+def pause_work_subtrack(
+    subtrack_id: int,
+    payload: SubtrackActionRequest | None = None,
+    db: Session = Depends(get_db),
+) -> SubtrackResponse:
+    subtrack = pause_subtrack(db, subtrack_id, payload.timestamp if payload else None)
+    return subtrack
+
+
+@app.post("/work/subtracks/{subtrack_id}/stop", response_model=SubtrackResponse)
+def stop_work_subtrack(
+    subtrack_id: int,
+    payload: SubtrackActionRequest | None = None,
+    db: Session = Depends(get_db),
+) -> SubtrackResponse:
+    subtrack = stop_subtrack(db, subtrack_id, payload.timestamp if payload else None)
     return subtrack
 
 

@@ -284,6 +284,10 @@ class SubtrackResponse(BaseModel):
     title: str
     start_time: Optional[dt.datetime]
     end_time: Optional[dt.datetime]
+    status: str
+    total_seconds: int
+    paused_duration: int
+    last_pause_start: Optional[dt.datetime]
     project: Optional[str]
     tags: List[str]
     note: Optional[str]
@@ -299,6 +303,12 @@ class SubtrackResponse(BaseModel):
             else None,
             "end_time": _serialize_datetime(self.end_time)
             if self.end_time
+            else None,
+            "status": self.status,
+            "total_seconds": self.total_seconds,
+            "paused_duration": self.paused_duration,
+            "last_pause_start": _serialize_datetime(self.last_pause_start)
+            if self.last_pause_start
             else None,
             "project": self.project,
             "tags": self.tags,
@@ -324,6 +334,10 @@ class SubtrackUpdateRequest(BaseModel):
     project: Optional[str] = None
     tags: Optional[List[str]] = None
     note: Optional[str] = None
+
+
+class SubtrackActionRequest(BaseModel):
+    timestamp: Optional[dt.datetime] = None
 
 
 class TravelInvoiceReference(BaseModel):
