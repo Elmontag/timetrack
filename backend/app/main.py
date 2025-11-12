@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import datetime as dt
+import mimetypes
 from pathlib import Path
 from typing import Optional
 
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from . import models
@@ -29,10 +31,16 @@ from .schemas import (
     HolidayResponse,
     LeaveCreateRequest,
     LeaveEntryResponse,
+    SessionNoteCreateRequest,
+    SessionNoteResponse,
     SubtrackCreateRequest,
+    SubtrackUpdateRequest,
     SubtrackResponse,
     TravelDocumentResponse,
+    TravelDocumentReorderRequest,
     TravelDocumentUpdateRequest,
+    TravelLetterCreateRequest,
+    TravelLetterPreviewResponse,
     TravelTripCreateRequest,
     TravelTripResponse,
     TravelTripUpdateRequest,
@@ -53,13 +61,17 @@ from .services import (
     create_holiday,
     create_subtrack,
     create_leave,
+    create_travel_letter_document,
     create_manual_session,
+    add_session_note,
     create_travel_trip,
     delete_holiday,
     delete_session,
+    delete_subtrack,
     delete_travel_document,
     delete_travel_trip,
     export_sessions,
+    generate_travel_letter_preview,
     fetch_caldav_calendars,
     import_holidays_from_ics,
     list_calendar_events,
@@ -70,19 +82,70 @@ from .services import (
     list_travel_trips,
     pause_or_resume_session,
     range_day_summaries,
+    reorder_travel_documents,
     resolve_travel_document_path,
     set_calendar_participation,
     start_session,
     stop_session,
     update_runtime_settings,
     update_session,
+    update_subtrack,
     update_travel_document,
     update_travel_trip,
 )
 from .state import RuntimeState
 from .token_utils import consume_token, create_token, verify_token
 
+
+
+def _apply_sqlite_migrations() -> None:
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("travel_documents")}
+    statements: list[str] = []
+    needs_sort_index_backfill = False
+    if "collection_label" not in columns:
+        statements.append("ALTER TABLE travel_documents ADD COLUMN collection_label VARCHAR(120)")
+    if "linked_invoice_id" not in columns:
+        statements.append("ALTER TABLE travel_documents ADD COLUMN linked_invoice_id INTEGER")
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS ix_travel_documents_linked_invoice_id ON travel_documents (linked_invoice_id)"
+        )
+    if "sort_index" not in columns:
+        statements.append(
+            "ALTER TABLE travel_documents ADD COLUMN sort_index INTEGER NOT NULL DEFAULT 0"
+        )
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS ix_travel_documents_trip_sort_index ON travel_documents (trip_id, sort_index)"
+        )
+        needs_sort_index_backfill = True
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+        if needs_sort_index_backfill:
+            with engine.begin() as connection:
+                result = connection.execute(
+                    text(
+                        "SELECT id, trip_id FROM travel_documents ORDER BY trip_id, created_at, id"
+                    )
+                )
+                current_trip_id: int | None = None
+                position = 0
+                for doc_id, trip_id in result:
+                    if current_trip_id != trip_id:
+                        current_trip_id = trip_id
+                        position = 0
+                    connection.execute(
+                        text(
+                            "UPDATE travel_documents SET sort_index = :position WHERE id = :document_id"
+                        ),
+                        {"position": position, "document_id": doc_id},
+                    )
+                    position += 1
+
+
 models.Base.metadata.create_all(bind=engine)
+_apply_sqlite_migrations()
 
 runtime_state = RuntimeState(settings)
 with db_session() as session:
@@ -128,6 +191,20 @@ def work_stop(payload: WorkStopRequest, request: Request, db: Session = Depends(
     return session
 
 
+@app.post(
+    "/work/session/{session_id}/notes",
+    response_model=SessionNoteResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def work_add_session_note(
+    session_id: int,
+    payload: SessionNoteCreateRequest,
+    db: Session = Depends(get_db),
+) -> SessionNoteResponse:
+    note = add_session_note(db, session_id, payload.content, payload.note_type, payload.created_at)
+    return note
+
+
 @app.post("/work/manual", response_model=WorkSessionBase, status_code=status.HTTP_201_CREATED)
 def work_manual(
     payload: WorkSessionManualRequest,
@@ -162,7 +239,7 @@ def create_work_subtrack(
     payload: SubtrackCreateRequest,
     request: Request,
     db: Session = Depends(get_db),
-) -> SubtrackResponse:
+    ) -> SubtrackResponse:
     state: RuntimeState = request.app.state.runtime_state
     subtrack = create_subtrack(
         db,
@@ -176,6 +253,30 @@ def create_work_subtrack(
         payload.note,
     )
     return subtrack
+
+
+@app.patch("/work/subtracks/{subtrack_id}", response_model=SubtrackResponse)
+def update_work_subtrack(
+    subtrack_id: int,
+    payload: SubtrackUpdateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> SubtrackResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    changes = payload.model_dump(exclude_unset=True)
+    subtrack = update_subtrack(db, state, subtrack_id, changes)
+    return subtrack
+
+
+@app.delete("/work/subtracks/{subtrack_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_work_subtrack(
+    subtrack_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> Response:
+    state: RuntimeState = request.app.state.runtime_state
+    delete_subtrack(db, state, subtrack_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.patch("/work/session/{session_id}", response_model=WorkSessionBase)
@@ -346,12 +447,23 @@ async def upload_travel_document(
     trip_id: int,
     document_type: str = Form(...),
     comment: Optional[str] = Form(None),
+    collection_label: Optional[str] = Form(None),
+    linked_invoice_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> TravelDocumentResponse:
     content = await file.read()
     normalized_comment = comment.strip() if comment and comment.strip() else None
-    document = add_travel_document(db, trip_id, document_type, file.filename or "upload", content, normalized_comment)
+    document = add_travel_document(
+        db,
+        trip_id,
+        document_type,
+        file.filename or "upload",
+        content,
+        normalized_comment,
+        collection_label=collection_label,
+        linked_invoice_id=linked_invoice_id,
+    )
     return document
 
 
@@ -370,6 +482,19 @@ def modify_travel_document(
     return document
 
 
+@app.post(
+    "/travels/{trip_id}/documents/reorder",
+    response_model=TravelTripResponse,
+)
+def reorder_trip_documents(
+    trip_id: int,
+    payload: TravelDocumentReorderRequest,
+    db: Session = Depends(get_db),
+) -> TravelTripResponse:
+    trip = reorder_travel_documents(db, trip_id, payload.order)
+    return trip
+
+
 @app.delete("/travels/{trip_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def remove_travel_document(trip_id: int, document_id: int, db: Session = Depends(get_db)) -> Response:
     delete_travel_document(db, trip_id, document_id)
@@ -386,6 +511,18 @@ def download_travel_document(
     return FileResponse(path, filename=document.original_name)
 
 
+@app.get("/travels/{trip_id}/documents/{document_id}/open")
+def open_travel_document(
+    trip_id: int,
+    document_id: int,
+    db: Session = Depends(get_db),
+) -> Response:
+    document, path = resolve_travel_document_path(db, trip_id, document_id)
+    media_type, _ = mimetypes.guess_type(document.original_name)
+    headers = {"Content-Disposition": f'inline; filename="{document.original_name}"'}
+    return FileResponse(path, media_type=media_type or "application/octet-stream", headers=headers)
+
+
 @app.get("/travels/{trip_id}/reisekostenpaket")
 def download_travel_dataset(trip_id: int, db: Session = Depends(get_db)) -> Response:
     filename, content = build_travel_dataset_archive(db, trip_id)
@@ -398,6 +535,33 @@ def print_travel_dataset(trip_id: int, db: Session = Depends(get_db)) -> Respons
     filename, content = build_travel_dataset_pdf(db, trip_id)
     headers = {"Content-Disposition": f'inline; filename="{filename}"'}
     return Response(content, media_type="application/pdf", headers=headers)
+
+
+@app.get("/travels/{trip_id}/anschreiben", response_model=TravelLetterPreviewResponse)
+def preview_travel_letter(
+    trip_id: int,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TravelLetterPreviewResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    preview = generate_travel_letter_preview(db, state, trip_id)
+    return TravelLetterPreviewResponse(**preview)
+
+
+@app.post(
+    "/travels/{trip_id}/anschreiben",
+    response_model=TravelDocumentResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_travel_letter(
+    trip_id: int,
+    payload: TravelLetterCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> TravelDocumentResponse:
+    state: RuntimeState = request.app.state.runtime_state
+    document = create_travel_letter_document(db, state, trip_id, payload.subject, payload.body)
+    return document
 
 
 @app.post("/exports", response_model=ExportResponse, status_code=status.HTTP_201_CREATED)
@@ -505,6 +669,11 @@ def read_settings(request: Request) -> SettingsResponse:
         expected_weekly_hours=snapshot["expected_weekly_hours"],
         vacation_days_per_year=snapshot["vacation_days_per_year"],
         vacation_days_carryover=snapshot["vacation_days_carryover"],
+        day_overview_refresh_seconds=snapshot["day_overview_refresh_seconds"],
+        time_display_format=snapshot["time_display_format"],
+        travel_sender_contact=snapshot["travel_sender_contact"],
+        travel_hr_contact=snapshot["travel_hr_contact"],
+        travel_letter_template=snapshot["travel_letter_template"],
     )
 
 
@@ -528,4 +697,9 @@ def write_settings(payload: SettingsUpdateRequest, request: Request, db: Session
         expected_weekly_hours=snapshot["expected_weekly_hours"],
         vacation_days_per_year=snapshot["vacation_days_per_year"],
         vacation_days_carryover=snapshot["vacation_days_carryover"],
+        day_overview_refresh_seconds=snapshot["day_overview_refresh_seconds"],
+        time_display_format=snapshot["time_display_format"],
+        travel_sender_contact=snapshot["travel_sender_contact"],
+        travel_hr_contact=snapshot["travel_hr_contact"],
+        travel_letter_template=snapshot["travel_letter_template"],
     )

@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import dayjs from 'dayjs'
-import { deleteSession, getSessionsForDay, updateSession, WorkSession, formatDuration } from '../api'
+import { deleteSession, getSessionsForDay, updateSession, WorkSession, TimeDisplayFormat } from '../api'
+import { formatSeconds } from '../utils/timeFormat'
 
 interface Props {
   refreshKey: string
+  timeDisplayFormat: TimeDisplayFormat
 }
 
 interface EditFormState {
@@ -15,7 +17,7 @@ interface EditFormState {
   tags: string
 }
 
-export function SessionList({ refreshKey }: Props) {
+export function SessionList({ refreshKey, timeDisplayFormat }: Props) {
   const [sessions, setSessions] = useState<WorkSession[]>([])
   const [day, setDay] = useState(dayjs().format('YYYY-MM-DD'))
   const [loading, setLoading] = useState(false)
@@ -23,12 +25,14 @@ export function SessionList({ refreshKey }: Props) {
   const [form, setForm] = useState<EditFormState>({ start: '', end: '', comment: '', project: '', tags: '' })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [expandedNotes, setExpandedNotes] = useState<number[]>([])
 
   const loadSessions = useCallback(async () => {
     setLoading(true)
     try {
       const data = await getSessionsForDay(day)
       setSessions(data)
+      setExpandedNotes((prev) => prev.filter((id) => data.some((session) => session.id === id)))
     } finally {
       setLoading(false)
     }
@@ -126,6 +130,21 @@ export function SessionList({ refreshKey }: Props) {
     }
   }
 
+  const toggleNotes = (sessionId: number) => {
+    setExpandedNotes((prev) =>
+      prev.includes(sessionId) ? prev.filter((id) => id !== sessionId) : [...prev, sessionId],
+    )
+  }
+
+  const formatSessionDuration = useCallback(
+    (seconds: number | null | undefined) =>
+      formatSeconds(seconds ?? 0, timeDisplayFormat, {
+        decimalPlaces: timeDisplayFormat === 'decimal' ? 2 : undefined,
+        includeUnit: timeDisplayFormat === 'decimal',
+      }),
+    [timeDisplayFormat],
+  )
+
   return (
     <div className="rounded-xl border border-slate-800 bg-slate-900/70 p-4 shadow">
       <div className="flex items-center justify-between gap-2">
@@ -154,6 +173,9 @@ export function SessionList({ refreshKey }: Props) {
         )}
         {sessions.map((session) => {
           const isEditing = editingId === session.id
+          const notesCount = session.notes ? session.notes.length : 0
+          const hasNotes = notesCount > 0
+          const notesOpen = expandedNotes.includes(session.id)
           return (
             <div key={session.id} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
               {isEditing ? (
@@ -234,10 +256,12 @@ export function SessionList({ refreshKey }: Props) {
                 <div className="space-y-2">
                   <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-slate-300">
                     <span>
-                      {new Date(session.start_time).toLocaleTimeString()} –{' '}
-                      {session.stop_time ? new Date(session.stop_time).toLocaleTimeString() : 'laufend'}
+                      {dayjs(session.start_time).format('HH:mm')} –{' '}
+                      {session.stop_time ? dayjs(session.stop_time).format('HH:mm') : 'laufend'}
                     </span>
-                    <span className="font-mono text-slate-100">{formatDuration(session.total_seconds)}</span>
+                    <span className="font-mono text-slate-100">
+                      {formatSessionDuration(session.total_seconds)}
+                    </span>
                   </div>
                   {session.comment && <p className="text-sm text-slate-400">{session.comment}</p>}
                   <div className="flex flex-wrap gap-2">
@@ -248,6 +272,34 @@ export function SessionList({ refreshKey }: Props) {
                       </span>
                     ))}
                   </div>
+                  {hasNotes && (
+                    <div className="rounded-md border border-slate-800 bg-slate-950/60">
+                      <button
+                        type="button"
+                        onClick={() => toggleNotes(session.id)}
+                        className="flex w-full items-center justify-between px-3 py-2 text-xs font-semibold text-slate-200 transition hover:bg-slate-900/70"
+                      >
+                        <span>Notizen ({notesCount})</span>
+                        <span className="font-mono text-[10px] text-slate-500">{notesOpen ? '−' : '+'}</span>
+                      </button>
+                      {notesOpen && (
+                        <ul className="space-y-2 border-t border-slate-800 px-3 py-2 text-xs text-slate-300">
+                          {session.notes.map((note) => (
+                            <li
+                              key={note.id}
+                              className="rounded-md border border-slate-800 bg-slate-950/50 p-2"
+                            >
+                              <div className="flex flex-wrap items-center justify-between gap-2 text-[11px] uppercase tracking-wide text-slate-500">
+                                <span>{note.note_type === 'start' ? 'Trackingstart' : 'Sitzung'}</span>
+                                <span>{dayjs(note.created_at).format('DD.MM.YYYY HH:mm')}</span>
+                              </div>
+                              <p className="mt-1 text-sm text-slate-200">{note.content}</p>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  )}
                   {session.status === 'stopped' && (
                     <div className="flex flex-wrap gap-2">
                       <button

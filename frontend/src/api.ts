@@ -1,7 +1,15 @@
 import axios from 'axios'
-import dayjs from 'dayjs'
-import duration from 'dayjs/plugin/duration'
 import { API_BASE } from './config'
+
+export type SessionNoteType = 'start' | 'runtime'
+
+export interface SessionNote {
+  id: number
+  session_id: number
+  note_type: SessionNoteType
+  content: string
+  created_at: string
+}
 
 export interface WorkSession {
   id: number
@@ -14,6 +22,7 @@ export interface WorkSession {
   paused_duration: number
   total_seconds: number | null
   last_pause_start: string | null
+  notes: SessionNote[]
 }
 
 export interface DaySummary {
@@ -64,6 +73,13 @@ export interface CalendarEvent {
   attendees: string[]
 }
 
+export interface TravelInvoiceReference {
+  id: number
+  document_type: string
+  original_name: string
+  created_at: string
+}
+
 export interface TravelDocument {
   id: number
   trip_id: number
@@ -71,8 +87,13 @@ export interface TravelDocument {
   original_name: string
   comment: string | null
   signed: boolean
+  collection_label: string | null
+  linked_invoice_id: number | null
+  linked_invoice: TravelInvoiceReference | null
+  sort_index: number
   created_at: string
   download_path: string
+  open_path: string
 }
 
 export interface TravelTrip {
@@ -91,6 +112,24 @@ export interface TravelTrip {
   dataset_print_path: string
 }
 
+export interface TravelContact {
+  name: string | null
+  company: string | null
+  department: string | null
+  street: string | null
+  postal_code: string | null
+  city: string | null
+  phone: string | null
+  email: string | null
+}
+
+export interface TravelLetterTemplate {
+  subject: string
+  body: string
+}
+
+export type TimeDisplayFormat = 'hh:mm' | 'decimal'
+
 export interface SettingsResponse {
   environment: string
   timezone: string
@@ -106,6 +145,11 @@ export interface SettingsResponse {
   expected_weekly_hours: number | null
   vacation_days_per_year: number
   vacation_days_carryover: number
+  day_overview_refresh_seconds: number
+  time_display_format: TimeDisplayFormat
+  travel_sender_contact: TravelContact
+  travel_hr_contact: TravelContact
+  travel_letter_template: TravelLetterTemplate
 }
 
 export interface CalDavCalendar {
@@ -140,8 +184,6 @@ export interface Subtrack {
   tags: string[]
   note: string | null
 }
-
-dayjs.extend(duration)
 
 const client = axios.create({
   baseURL: API_BASE,
@@ -180,6 +222,14 @@ export async function createManualSession(payload: {
 
 export async function getSessionsForDay(day: string) {
   const response = await client.get<WorkSession[]>(`/work/day/${day}`)
+  return response.data
+}
+
+export async function createSessionNote(
+  sessionId: number,
+  payload: { content: string; note_type?: SessionNoteType; created_at?: string },
+) {
+  const response = await client.post<SessionNote>(`/work/session/${sessionId}/notes`, payload)
   return response.data
 }
 
@@ -263,6 +313,26 @@ export async function createSubtrack(payload: {
   return response.data
 }
 
+export async function updateSubtrack(
+  subtrackId: number,
+  payload: {
+    day?: string | null
+    title?: string | null
+    start_time?: string | null
+    end_time?: string | null
+    project?: string | null
+    tags?: string[] | null
+    note?: string | null
+  },
+) {
+  const response = await client.patch<Subtrack>(`/work/subtracks/${subtrackId}`, payload)
+  return response.data
+}
+
+export async function deleteSubtrack(subtrackId: number) {
+  await client.delete(`/work/subtracks/${subtrackId}`)
+}
+
 export async function createCalendarEvent(payload: {
   title: string
   start_time: string
@@ -313,14 +383,6 @@ export async function getCaldavCalendars() {
   return response.data
 }
 
-export function formatDuration(seconds: number | null | undefined) {
-  if (!seconds) return '0:00'
-  const duration = dayjs.duration(seconds, 'seconds')
-  const hours = Math.floor(duration.asHours())
-  const minutes = duration.minutes().toString().padStart(2, '0')
-  return `${hours}:${minutes}`
-}
-
 export async function listTravels() {
   const response = await client.get<TravelTrip[]>('/travels')
   return response.data
@@ -359,14 +421,46 @@ export async function deleteTravel(tripId: number) {
   await client.delete(`/travels/${tripId}`)
 }
 
-export async function uploadTravelDocument(
+export interface TravelLetterPreview {
+  subject: string
+  body: string
+  context: Record<string, string>
+  sender_contact: TravelContact
+  hr_contact: TravelContact
+}
+
+export async function getTravelLetterPreview(tripId: number) {
+  const response = await client.get<TravelLetterPreview>(`/travels/${tripId}/anschreiben`)
+  return response.data
+}
+
+export async function createTravelLetter(
   tripId: number,
-  payload: { document_type: string; comment?: string | null; file: File },
+  payload: { subject: string; body: string },
 ) {
+  const response = await client.post<TravelDocument>(`/travels/${tripId}/anschreiben`, payload)
+  return response.data
+}
+
+export interface UploadTravelDocumentPayload {
+  document_type: string
+  comment?: string | null
+  file: File
+  collection_label?: string | null
+  linked_invoice_id?: number | null
+}
+
+export async function uploadTravelDocument(tripId: number, payload: UploadTravelDocumentPayload) {
   const formData = new FormData()
   formData.append('document_type', payload.document_type)
   if (payload.comment) {
     formData.append('comment', payload.comment)
+  }
+  if (payload.collection_label) {
+    formData.append('collection_label', payload.collection_label)
+  }
+  if (typeof payload.linked_invoice_id === 'number') {
+    formData.append('linked_invoice_id', String(payload.linked_invoice_id))
   }
   formData.append('file', payload.file)
   const response = await client.post<TravelDocument>(`/travels/${tripId}/documents`, formData, {
@@ -378,12 +472,17 @@ export async function uploadTravelDocument(
 export async function updateTravelDocument(
   tripId: number,
   documentId: number,
-  payload: { comment?: string | null; signed?: boolean },
+  payload: { comment?: string | null; signed?: boolean; collection_label?: string | null; linked_invoice_id?: number | null },
 ) {
   const response = await client.patch<TravelDocument>(
     `/travels/${tripId}/documents/${documentId}`,
     payload,
   )
+  return response.data
+}
+
+export async function reorderTravelDocuments(tripId: number, order: number[]) {
+  const response = await client.post<TravelTrip>(`/travels/${tripId}/documents/reorder`, { order })
   return response.data
 }
 
@@ -393,6 +492,10 @@ export async function deleteTravelDocument(tripId: number, documentId: number) {
 
 export function travelDocumentDownloadUrl(tripId: number, documentId: number) {
   return `${API_BASE}/travels/${tripId}/documents/${documentId}/download`
+}
+
+export function travelDocumentOpenUrl(tripId: number, documentId: number) {
+  return `${API_BASE}/travels/${tripId}/documents/${documentId}/open`
 }
 
 export function travelDatasetDownloadUrl(datasetPath: string) {

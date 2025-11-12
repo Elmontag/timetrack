@@ -7,9 +7,47 @@ from typing import Any, Dict, Iterable, List, Optional
 
 from sqlalchemy.orm import Session
 
-from .config import Settings
+from .config import Settings, DEFAULT_TRAVEL_LETTER_TEMPLATE
 from .models import AppSetting
 from .utils import normalize_calendar_identifier, normalize_calendar_selection
+
+
+CONTACT_FIELDS = (
+    "name",
+    "company",
+    "department",
+    "street",
+    "postal_code",
+    "city",
+    "phone",
+    "email",
+)
+
+TIME_DISPLAY_FORMATS = {"hh:mm", "decimal"}
+
+
+def _normalize_contact(value: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    normalized: Dict[str, str] = {}
+    if isinstance(value, dict):
+        for field in CONTACT_FIELDS:
+            raw = value.get(field)
+            normalized[field] = raw.strip() if isinstance(raw, str) else ""
+    else:
+        for field in CONTACT_FIELDS:
+            normalized[field] = ""
+    return normalized
+
+
+def _normalize_template(value: Optional[Dict[str, Any]]) -> Dict[str, str]:
+    template = dict(DEFAULT_TRAVEL_LETTER_TEMPLATE)
+    if isinstance(value, dict):
+        subject = value.get("subject")
+        body = value.get("body")
+        if isinstance(subject, str):
+            template["subject"] = subject
+        if isinstance(body, str):
+            template["body"] = body
+    return template
 
 
 class RuntimeState:
@@ -32,6 +70,13 @@ class RuntimeState:
         self.expected_weekly_hours: Optional[float] = base_settings.expected_weekly_hours
         self.vacation_days_per_year: float = base_settings.vacation_days_per_year
         self.vacation_days_carryover: float = base_settings.vacation_days_carryover
+        self.travel_sender_contact: Dict[str, str] = _normalize_contact(base_settings.travel_sender_contact)
+        self.travel_hr_contact: Dict[str, str] = _normalize_contact(base_settings.travel_hr_contact)
+        self.travel_letter_template: Dict[str, str] = _normalize_template(base_settings.travel_letter_template)
+        self.day_overview_refresh_seconds: int = max(1, int(base_settings.day_overview_refresh_seconds))
+        self.time_display_format: str = (
+            base_settings.time_display_format if base_settings.time_display_format in TIME_DISPLAY_FORMATS else "hh:mm"
+        )
 
     @property
     def block_ips(self) -> List[str]:
@@ -56,6 +101,11 @@ class RuntimeState:
                 "expected_weekly_hours": self.expected_weekly_hours,
                 "vacation_days_per_year": self.vacation_days_per_year,
                 "vacation_days_carryover": self.vacation_days_carryover,
+                "day_overview_refresh_seconds": self.day_overview_refresh_seconds,
+                "time_display_format": self.time_display_format,
+                "travel_sender_contact": dict(self.travel_sender_contact),
+                "travel_hr_contact": dict(self.travel_hr_contact),
+                "travel_letter_template": dict(self.travel_letter_template),
             }
 
     def apply(self, updates: Dict[str, Any]) -> None:
@@ -91,6 +141,18 @@ class RuntimeState:
                 self.vacation_days_per_year = float(updates["vacation_days_per_year"])
             if "vacation_days_carryover" in updates and updates["vacation_days_carryover"] is not None:
                 self.vacation_days_carryover = float(updates["vacation_days_carryover"])
+            if "travel_sender_contact" in updates and updates["travel_sender_contact"] is not None:
+                self.travel_sender_contact = _normalize_contact(updates["travel_sender_contact"])
+            if "travel_hr_contact" in updates and updates["travel_hr_contact"] is not None:
+                self.travel_hr_contact = _normalize_contact(updates["travel_hr_contact"])
+            if "travel_letter_template" in updates and updates["travel_letter_template"] is not None:
+                self.travel_letter_template = _normalize_template(updates["travel_letter_template"])
+            if "day_overview_refresh_seconds" in updates and updates["day_overview_refresh_seconds"] is not None:
+                self.day_overview_refresh_seconds = max(1, int(updates["day_overview_refresh_seconds"]))
+            if "time_display_format" in updates and updates["time_display_format"]:
+                value = updates.get("time_display_format")
+                if isinstance(value, str) and value in TIME_DISPLAY_FORMATS:
+                    self.time_display_format = value
 
     def load_from_db(self, session: Session) -> None:
         records = session.query(AppSetting).all()
@@ -117,6 +179,27 @@ class RuntimeState:
                 decoded["vacation_days_per_year"] = float(record.value) if record.value else 0.0
             elif record.key == "vacation_days_carryover":
                 decoded["vacation_days_carryover"] = float(record.value) if record.value else 0.0
+            elif record.key == "travel_sender_contact":
+                try:
+                    decoded["travel_sender_contact"] = json.loads(record.value)
+                except json.JSONDecodeError:
+                    decoded["travel_sender_contact"] = {}
+            elif record.key == "travel_hr_contact":
+                try:
+                    decoded["travel_hr_contact"] = json.loads(record.value)
+                except json.JSONDecodeError:
+                    decoded["travel_hr_contact"] = {}
+            elif record.key == "travel_letter_template":
+                try:
+                    decoded["travel_letter_template"] = json.loads(record.value)
+                except json.JSONDecodeError:
+                    decoded["travel_letter_template"] = {}
+            elif record.key == "day_overview_refresh_seconds":
+                decoded["day_overview_refresh_seconds"] = int(record.value) if record.value else 1
+            elif record.key == "time_display_format":
+                decoded["time_display_format"] = (
+                    record.value if record.value in TIME_DISPLAY_FORMATS else "hh:mm"
+                )
         if decoded:
             self.apply(decoded)
 
@@ -135,8 +218,14 @@ class RuntimeState:
                 continue
             if key in {"expected_daily_hours", "expected_weekly_hours"}:
                 value = "" if value in (None, "") else str(value)
+            if key == "day_overview_refresh_seconds":
+                value = str(max(1, int(value))) if value not in (None, "") else "1"
             if key in {"vacation_days_per_year", "vacation_days_carryover"}:
                 value = str(value)
+            if key in {"travel_sender_contact", "travel_hr_contact", "travel_letter_template"}:
+                value = json.dumps(value)
+            if key == "time_display_format":
+                value = value if value in TIME_DISPLAY_FORMATS else "hh:mm"
             record = session.query(AppSetting).filter(AppSetting.key == key).one_or_none()
             if record:
                 record.value = value

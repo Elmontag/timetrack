@@ -15,15 +15,20 @@ import {
   createTravel,
   deleteTravel,
   deleteTravelDocument,
+  createTravelLetter,
+  getTravelLetterPreview,
   listTravels,
   TravelDocument,
   TravelTrip,
+  TravelLetterPreview,
   travelDatasetDownloadUrl,
   travelDatasetPrintUrl,
   travelDocumentDownloadUrl,
+  travelDocumentOpenUrl,
   updateTravel,
   updateTravelDocument,
   uploadTravelDocument,
+  reorderTravelDocuments,
 } from '../api'
 
 const WORKFLOW_STEPS = [
@@ -43,9 +48,32 @@ const DOCUMENT_TYPES = [
   'Beleg',
   'Reisekostenabrechnung',
   'Sonstige Unterlagen',
+  'Anschreiben',
 ] as const
 
 const SIGNABLE_TYPES = new Set(['Antrag', 'Reisekostenabrechnung'])
+
+const CONTACT_ORDER = [
+  'name',
+  'company',
+  'department',
+  'street',
+  'postal_code',
+  'city',
+  'phone',
+  'email',
+] as const
+
+const CONTACT_LABELS: Record<(typeof CONTACT_ORDER)[number], string> = {
+  name: 'Name',
+  company: 'Firma',
+  department: 'Abteilung',
+  street: 'Straße',
+  postal_code: 'PLZ',
+  city: 'Ort',
+  phone: 'Telefon',
+  email: 'E-Mail',
+}
 
 interface ModalConfig {
   mode: 'create' | 'edit'
@@ -129,6 +157,7 @@ export function TravelManager() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [expandedTrips, setExpandedTrips] = useState<number[]>([])
+  const [expandedCollections, setExpandedCollections] = useState<number[]>([])
   const [workflowUpdating, setWorkflowUpdating] = useState<number | null>(null)
   const [updatingDocId, setUpdatingDocId] = useState<number | null>(null)
   const [openDatasetMenuId, setOpenDatasetMenuId] = useState<number | null>(null)
@@ -140,6 +169,15 @@ export function TravelManager() {
   })
   const [archivedPage, setArchivedPage] = useState(1)
   const [archivedPageSize, setArchivedPageSize] = useState(10)
+  const [letterTrip, setLetterTrip] = useState<TravelTrip | null>(null)
+  const [letterPreview, setLetterPreview] = useState<TravelLetterPreview | null>(null)
+  const [letterLoading, setLetterLoading] = useState(false)
+  const [letterSaving, setLetterSaving] = useState(false)
+  const [letterError, setLetterError] = useState<string | null>(null)
+  const [letterSubject, setLetterSubject] = useState('')
+  const [letterBody, setLetterBody] = useState('')
+  const [draggedDocument, setDraggedDocument] = useState<{ tripId: number; documentId: number } | null>(null)
+  const [reorderingTripId, setReorderingTripId] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const draftIdCounter = useRef(0)
 
@@ -215,13 +253,101 @@ export function TravelManager() {
     [],
   )
 
+  const openLetterModal = useCallback(
+    (trip: TravelTrip) => {
+      setOpenDatasetMenuId(null)
+      setLetterTrip(trip)
+      setLetterPreview(null)
+      setLetterSubject(`Reisekostenabrechnung ${trip.title}`.trim())
+      setLetterBody('')
+      setLetterError(null)
+      setLetterLoading(true)
+      getTravelLetterPreview(trip.id)
+        .then((previewData) => {
+          setLetterPreview(previewData)
+          setLetterSubject(previewData.subject)
+          setLetterBody(previewData.body)
+        })
+        .catch((error) => {
+          console.error(error)
+          setLetterError('Anschreiben konnte nicht vorbereitet werden.')
+        })
+        .finally(() => {
+          setLetterLoading(false)
+        })
+    },
+    [],
+  )
+
+  const closeLetterModal = useCallback(() => {
+    setLetterTrip(null)
+    setLetterPreview(null)
+    setLetterSubject('')
+    setLetterBody('')
+    setLetterError(null)
+    setLetterLoading(false)
+    setLetterSaving(false)
+  }, [])
+
+  const handleLetterSubmit = useCallback(
+    async (event: FormEvent<HTMLFormElement>) => {
+      event.preventDefault()
+      if (!letterTrip) {
+        return
+      }
+      setLetterSaving(true)
+      setLetterError(null)
+      try {
+        const document = await createTravelLetter(letterTrip.id, {
+          subject: letterSubject.trim(),
+          body: letterBody,
+        })
+        setTrips((prev) =>
+          prev.map((trip) =>
+            trip.id === letterTrip.id
+              ? { ...trip, documents: [...trip.documents, document] }
+              : trip,
+          ),
+        )
+        const downloadUrl = travelDocumentDownloadUrl(document.trip_id, document.id)
+        closeLetterModal()
+        window.open(downloadUrl, '_blank')
+      } catch (error) {
+        console.error(error)
+        setLetterError('Anschreiben konnte nicht erstellt werden.')
+      } finally {
+        setLetterSaving(false)
+      }
+    },
+    [closeLetterModal, letterBody, letterSubject, letterTrip, setTrips],
+  )
+
   const loadTrips = useCallback(async () => {
     setLoading(true)
     setGlobalError(null)
     try {
       const data = await listTravels()
-      setTrips(data)
+      const normalized = data.map((trip) => ({
+        ...trip,
+        documents: [...trip.documents].sort((a, b) => {
+          if (a.sort_index !== b.sort_index) {
+            return a.sort_index - b.sort_index
+          }
+          return dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf()
+        }),
+      }))
+      setTrips(normalized)
       setExpandedTrips((prev) => prev.filter((id) => data.some((trip) => trip.id === id)))
+      const invoiceIds = data.flatMap((trip) =>
+        trip.documents
+          .filter((document) => document.document_type === 'Rechnung')
+          .map((document) => document.id),
+      )
+      setExpandedCollections((prev) => {
+        const preserved = prev.filter((id) => invoiceIds.includes(id))
+        const missing = invoiceIds.filter((id) => !preserved.includes(id))
+        return [...preserved, ...missing]
+      })
       setOpenDatasetMenuId(null)
       return data
     } catch (error) {
@@ -229,6 +355,7 @@ export function TravelManager() {
       setGlobalError('Dienstreisen konnten nicht geladen werden.')
       setTrips([])
       setExpandedTrips([])
+      setExpandedCollections([])
       return [] as TravelTrip[]
     } finally {
       setLoading(false)
@@ -391,6 +518,14 @@ export function TravelManager() {
     )
   }
 
+  const toggleCollection = useCallback((invoiceId: number) => {
+    setExpandedCollections((prev) =>
+      prev.includes(invoiceId)
+        ? prev.filter((id) => id !== invoiceId)
+        : [...prev, invoiceId],
+    )
+  }, [])
+
   const toggleDatasetMenu = useCallback((tripId: number) => {
     setOpenDatasetMenuId((prev) => (prev === tripId ? null : tripId))
   }, [])
@@ -539,6 +674,82 @@ export function TravelManager() {
     }
   }
 
+  const handleCollectionLabel = async (trip: TravelTrip, document: TravelDocument) => {
+    const next = window.prompt(
+      'Sammelbegriff festlegen (leer lassen, um zu entfernen)',
+      document.collection_label ?? '',
+    )
+    if (next === null) return
+    const trimmed = next.trim()
+    setGlobalError(null)
+    setUpdatingDocId(document.id)
+    try {
+      await updateTravelDocument(trip.id, document.id, {
+        collection_label: trimmed.length > 0 ? trimmed : null,
+      })
+      await loadTrips()
+    } catch (error) {
+      console.error('Sammelbegriff konnte nicht gespeichert werden', error)
+      setGlobalError('Sammelbegriff konnte nicht gespeichert werden.')
+    } finally {
+      setUpdatingDocId(null)
+    }
+  }
+
+  const handleLinkInvoice = async (trip: TravelTrip, document: TravelDocument) => {
+    const invoices = trip.documents.filter((item) => item.document_type === 'Rechnung')
+    if (invoices.length === 0) {
+      window.alert('Es sind keine Rechnungen vorhanden, die verknüpft werden können.')
+      return
+    }
+    const options = invoices
+      .map((invoice) => {
+        const label = invoice.collection_label ? `${invoice.collection_label} · ` : ''
+        return `${invoice.id}: ${label}${invoice.original_name}`
+      })
+      .join('\n')
+    const response = window.prompt(
+      `Rechnung auswählen (ID eingeben, leer lassen für keine Verknüpfung):\n${options}`,
+      document.linked_invoice_id ? String(document.linked_invoice_id) : '',
+    )
+    if (response === null) return
+    const choice = response.trim()
+    let invoiceId: number | null = null
+    if (choice !== '') {
+      const parsed = Number(choice)
+      if (!Number.isInteger(parsed) || !invoices.some((invoice) => invoice.id === parsed)) {
+        window.alert('Ungültige Auswahl. Bitte eine der angezeigten IDs verwenden.')
+        return
+      }
+      invoiceId = parsed
+    }
+    setGlobalError(null)
+    setUpdatingDocId(document.id)
+    try {
+      await updateTravelDocument(trip.id, document.id, { linked_invoice_id: invoiceId })
+      await loadTrips()
+    } catch (error) {
+      console.error('Verknüpfung konnte nicht gespeichert werden', error)
+      setGlobalError('Verknüpfung konnte nicht gespeichert werden.')
+    } finally {
+      setUpdatingDocId(null)
+    }
+  }
+
+  const handleUnlinkInvoice = async (trip: TravelTrip, document: TravelDocument) => {
+    setGlobalError(null)
+    setUpdatingDocId(document.id)
+    try {
+      await updateTravelDocument(trip.id, document.id, { linked_invoice_id: null })
+      await loadTrips()
+    } catch (error) {
+      console.error('Verknüpfung konnte nicht entfernt werden', error)
+      setGlobalError('Verknüpfung konnte nicht entfernt werden.')
+    } finally {
+      setUpdatingDocId(null)
+    }
+  }
+
   const handleToggleSigned = async (trip: TravelTrip, document: TravelDocument) => {
     const next = !document.signed
     setGlobalError(null)
@@ -554,6 +765,294 @@ export function TravelManager() {
     }
   }
 
+  const handleDocumentDragStart = useCallback(
+    (event: DragEvent<HTMLElement>, tripId: number, documentId: number) => {
+      if (reorderingTripId !== null) {
+        event.preventDefault()
+        return
+      }
+      event.dataTransfer.effectAllowed = 'move'
+      event.dataTransfer.setData('text/plain', String(documentId))
+      setDraggedDocument({ tripId, documentId })
+    },
+    [reorderingTripId],
+  )
+
+  const handleDocumentDragEnd = useCallback(() => {
+    setDraggedDocument(null)
+  }, [])
+
+  const handleDocumentDragOver = useCallback(
+    (event: DragEvent<HTMLElement>, tripId: number) => {
+      if (!draggedDocument || draggedDocument.tripId !== tripId) {
+        return
+      }
+      event.preventDefault()
+      event.dataTransfer.dropEffect = 'move'
+    },
+    [draggedDocument],
+  )
+
+  const handleDocumentDrop = useCallback(
+    async (event: DragEvent<HTMLElement>, tripId: number, targetDocumentId: number) => {
+      if (!draggedDocument || draggedDocument.tripId !== tripId) {
+        return
+      }
+      event.preventDefault()
+      event.stopPropagation()
+      const sourceDocumentId = draggedDocument.documentId
+      setDraggedDocument(null)
+      if (sourceDocumentId === targetDocumentId) {
+        return
+      }
+      const trip = trips.find((item) => item.id === tripId)
+      if (!trip) {
+        return
+      }
+      const documents = [...trip.documents]
+      const fromIndex = documents.findIndex((doc) => doc.id === sourceDocumentId)
+      const targetIndex = documents.findIndex((doc) => doc.id === targetDocumentId)
+      if (fromIndex === -1 || targetIndex === -1) {
+        return
+      }
+      const rect = (event.currentTarget as HTMLElement).getBoundingClientRect()
+      const shouldPlaceAfter = event.clientY - rect.top > rect.height / 2
+      const [moved] = documents.splice(fromIndex, 1)
+      let adjustedTargetIndex = targetIndex
+      if (fromIndex < targetIndex) {
+        adjustedTargetIndex -= 1
+      }
+      if (shouldPlaceAfter) {
+        adjustedTargetIndex += 1
+      }
+      if (adjustedTargetIndex < 0) {
+        adjustedTargetIndex = 0
+      }
+      if (adjustedTargetIndex > documents.length) {
+        adjustedTargetIndex = documents.length
+      }
+      documents.splice(adjustedTargetIndex, 0, moved)
+      const reorderedDocs = documents.map((doc, index) => ({ ...doc, sort_index: index }))
+      const orderedIds = reorderedDocs.map((doc) => doc.id)
+      setTrips((prev) =>
+        prev.map((item) => (item.id === tripId ? { ...item, documents: reorderedDocs } : item)),
+      )
+      setReorderingTripId(tripId)
+      setGlobalError(null)
+      try {
+        const updatedTrip = await reorderTravelDocuments(tripId, orderedIds)
+        const normalizedTrip = {
+          ...updatedTrip,
+          documents: [...updatedTrip.documents].sort((a, b) => {
+            if (a.sort_index !== b.sort_index) {
+              return a.sort_index - b.sort_index
+            }
+            return dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf()
+          }),
+        }
+        setTrips((prev) =>
+          prev.map((item) => (item.id === tripId ? normalizedTrip : item)),
+        )
+      } catch (error) {
+        console.error('Dokumente konnten nicht neu angeordnet werden', error)
+        setGlobalError('Dokumente konnten nicht neu angeordnet werden.')
+        await loadTrips()
+      } finally {
+        setReorderingTripId(null)
+      }
+    },
+    [draggedDocument, loadTrips, trips],
+  )
+
+  const renderDocumentCard = (
+    trip: TravelTrip,
+    document: TravelDocument,
+    options: { nested?: boolean; receipts?: TravelDocument[] } = {},
+  ) => {
+    const isNested = options.nested ?? false
+    const receipts = options.receipts ?? []
+    const isSignable = SIGNABLE_TYPES.has(document.document_type)
+    const isUpdating = updatingDocId === document.id
+    const linkedInfo =
+      document.linked_invoice && document.document_type !== 'Rechnung' && !isNested
+        ? `Rechnung: ${document.linked_invoice.original_name}`
+        : null
+    const isDragging = draggedDocument?.documentId === document.id
+    const isPdfDocument = document.original_name.toLowerCase().endsWith('.pdf')
+    const isCollectionExpanded = receipts.length > 0 && expandedCollections.includes(document.id)
+    const isReordering = reorderingTripId === trip.id
+
+    return (
+      <div
+        key={document.id}
+        className={clsx(
+          'rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3',
+          isNested && 'ml-4 border-slate-800/70 bg-slate-950/40',
+          (isDragging || isReordering) && 'opacity-70',
+        )}
+        draggable={!isReordering}
+        onDragStart={(event) => handleDocumentDragStart(event, trip.id, document.id)}
+        onDragOver={(event) => handleDocumentDragOver(event, trip.id)}
+        onDrop={(event) => handleDocumentDrop(event, trip.id, document.id)}
+        onDragEnd={handleDocumentDragEnd}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-slate-500">
+              <span>{document.document_type}</span>
+              <span>·</span>
+              <span>{dayjs(document.created_at).format('DD.MM.YYYY HH:mm')}</span>
+              {document.collection_label && (
+                <span className="rounded bg-primary/15 px-2 py-0.5 text-[10px] text-primary">
+                  {document.collection_label}
+                </span>
+              )}
+              {linkedInfo && (
+                <span className="rounded bg-slate-900/70 px-2 py-0.5 text-[10px] text-slate-200">
+                  {linkedInfo}
+                </span>
+              )}
+              {isSignable && (
+                <span className="rounded bg-slate-900/50 px-2 py-0.5 text-[10px] text-slate-200">
+                  {document.signed ? 'Unterschrieben' : 'Nicht unterschrieben'}
+                </span>
+              )}
+            </div>
+            <p className="text-sm font-medium text-slate-100">{document.original_name}</p>
+            <p className="text-xs text-slate-400">
+              {document.comment ? document.comment : 'Kein Kommentar hinterlegt.'}
+            </p>
+            {document.linked_invoice_id && !document.linked_invoice && (
+              <p className="text-xs text-amber-300">Zugeordnete Rechnung konnte nicht gefunden werden.</p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {isPdfDocument && (
+              <button
+                type="button"
+                onClick={() =>
+                  window.open(
+                    travelDocumentOpenUrl(trip.id, document.id),
+                    '_blank',
+                    'noopener,noreferrer',
+                  )
+                }
+                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+              >
+                Öffnen
+              </button>
+            )}
+            <a
+              href={travelDocumentDownloadUrl(trip.id, document.id)}
+              className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+            >
+              Download
+            </a>
+            <button
+              type="button"
+              onClick={() => handleDocumentComment(trip, document)}
+              className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+              disabled={isUpdating}
+            >
+              Kommentar bearbeiten
+            </button>
+            {document.document_type === 'Rechnung' && (
+              <button
+                type="button"
+                onClick={() => handleCollectionLabel(trip, document)}
+                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                disabled={isUpdating}
+              >
+                {document.collection_label ? 'Sammelbegriff ändern' : 'Sammelbegriff setzen'}
+              </button>
+            )}
+            {document.document_type === 'Beleg' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleLinkInvoice(trip, document)}
+                  className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                  disabled={isUpdating}
+                >
+                  {document.linked_invoice_id ? 'Rechnung ändern' : 'Rechnung verknüpfen'}
+                </button>
+                {document.linked_invoice_id && (
+                  <button
+                    type="button"
+                    onClick={() => handleUnlinkInvoice(trip, document)}
+                    className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-300 hover:border-rose-400 hover:text-rose-200"
+                    disabled={isUpdating}
+                  >
+                    Verknüpfung lösen
+                  </button>
+                )}
+              </>
+            )}
+            {isSignable && (
+              <button
+                type="button"
+                onClick={() => handleToggleSigned(trip, document)}
+                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                disabled={isUpdating}
+              >
+                {document.signed ? 'Signatur entfernen' : 'Als unterschrieben markieren'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => handleDocumentDelete(trip, document)}
+              className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-300 hover:border-rose-400 hover:text-rose-200"
+              disabled={isUpdating}
+            >
+              Löschen
+            </button>
+          </div>
+        </div>
+        {receipts.length > 0 && (
+          <div className="mt-3 rounded-lg border border-slate-800/70 bg-slate-950/40 p-2">
+            <button
+              type="button"
+              onClick={() => toggleCollection(document.id)}
+              className="flex w-full items-center justify-between gap-2 text-xs font-medium text-slate-200"
+              aria-expanded={isCollectionExpanded}
+            >
+              <span>
+                {document.collection_label
+                  ? `${document.collection_label} (${receipts.length} ${receipts.length === 1 ? 'Beleg' : 'Belege'})`
+                  : `Verknüpfte Belege (${receipts.length})`}
+              </span>
+              <svg
+                className={clsx(
+                  'h-4 w-4 text-slate-400 transition-transform',
+                  isCollectionExpanded && 'rotate-180',
+                )}
+                viewBox="0 0 20 20"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+                aria-hidden="true"
+              >
+                <path
+                  d="M5 8l5 5 5-5"
+                  stroke="currentColor"
+                  strokeWidth={1.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            {isCollectionExpanded && (
+              <div className="mt-2 space-y-2">
+                {receipts.map((receipt) =>
+                  renderDocumentCard(trip, receipt, { nested: true }),
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   const renderTrip = (trip: TravelTrip) => {
     const isExpanded = expandedTrips.includes(trip.id)
     const statusIndex = Math.max(
@@ -564,6 +1063,27 @@ export function TravelManager() {
     const previousStep = statusIndex > 0 ? WORKFLOW_STEPS[statusIndex - 1] : null
     const nextStep =
       statusIndex < WORKFLOW_STEPS.length - 1 ? WORKFLOW_STEPS[statusIndex + 1] : null
+
+    const isReorderingDocuments = reorderingTripId === trip.id
+    const renderedDocuments: ReactNode[] = []
+    const handledIds = new Set<number>()
+    for (const document of trip.documents) {
+      if (handledIds.has(document.id)) {
+        continue
+      }
+      if (document.document_type === 'Beleg' && document.linked_invoice_id) {
+        continue
+      }
+      let receipts: TravelDocument[] = []
+      if (document.document_type === 'Rechnung') {
+        receipts = trip.documents.filter((item) => item.linked_invoice_id === document.id)
+        for (const receipt of receipts) {
+          handledIds.add(receipt.id)
+        }
+      }
+      handledIds.add(document.id)
+      renderedDocuments.push(renderDocumentCard(trip, document, { receipts }))
+    }
 
     return (
       <li
@@ -692,6 +1212,13 @@ export function TravelManager() {
                   >
                     Dokument hochladen
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => openLetterModal(trip)}
+                    className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                  >
+                    Anschreiben erzeugen
+                  </button>
                   <div className="relative" data-dataset-menu>
                     <button
                       type="button"
@@ -745,67 +1272,12 @@ export function TravelManager() {
               {trip.documents.length === 0 ? (
                 <p className="mt-2 text-xs text-slate-500">Keine Dokumente vorhanden.</p>
               ) : (
-                <ul className="mt-3 space-y-3">
-                  {trip.documents.map((document) => (
-                    <li
-                      key={document.id}
-                      className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-slate-500">
-                            <span>{document.document_type}</span>
-                            <span>·</span>
-                            <span>{dayjs(document.created_at).format('DD.MM.YYYY HH:mm')}</span>
-                            {SIGNABLE_TYPES.has(document.document_type) && (
-                              <span className="rounded bg-slate-900/50 px-2 py-0.5 text-[10px] text-slate-200">
-                                {document.signed ? 'Unterschrieben' : 'Nicht unterschrieben'}
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-sm font-medium text-slate-100">{document.original_name}</p>
-                          <p className="text-xs text-slate-400">
-                            {document.comment ? document.comment : 'Kein Kommentar hinterlegt.'}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <a
-                            href={travelDocumentDownloadUrl(trip.id, document.id)}
-                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
-                          >
-                            Download
-                          </a>
-                          <button
-                            type="button"
-                            onClick={() => handleDocumentComment(trip, document)}
-                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
-                            disabled={updatingDocId === document.id}
-                          >
-                            Kommentar bearbeiten
-                          </button>
-                          {SIGNABLE_TYPES.has(document.document_type) && (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleSigned(trip, document)}
-                              className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
-                              disabled={updatingDocId === document.id}
-                            >
-                              {document.signed ? 'Signatur entfernen' : 'Als unterschrieben markieren'}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleDocumentDelete(trip, document)}
-                            className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-300 hover:border-rose-400 hover:text-rose-200"
-                            disabled={updatingDocId === document.id}
-                          >
-                            Löschen
-                          </button>
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                <div className="relative mt-3 space-y-3">
+                  {isReorderingDocuments && (
+                    <div className="absolute inset-0 cursor-progress rounded-lg border border-slate-800/60 bg-slate-950/40 backdrop-blur-sm" />
+                  )}
+                  {renderedDocuments.map((card) => card)}
+                </div>
               )}
             </div>
           </div>
@@ -1046,6 +1518,115 @@ export function TravelManager() {
             <p className="md:col-span-2 text-sm text-rose-300">{formError}</p>
           )}
         </form>
+      </Lightbox>
+
+      <Lightbox
+        open={Boolean(letterTrip)}
+        title={letterTrip ? `Anschreiben für "${letterTrip.title}"` : 'Anschreiben erstellen'}
+        onClose={closeLetterModal}
+        contentClassName="max-h-[70vh] overflow-y-auto pr-1"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeLetterModal}
+              className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+              disabled={letterSaving}
+            >
+              Abbrechen
+            </button>
+            <button
+              type="submit"
+              form="travel-letter"
+              disabled={letterSaving || letterLoading}
+              className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 disabled:opacity-50"
+            >
+              Anschreiben speichern &amp; herunterladen
+            </button>
+          </>
+        }
+      >
+        {letterLoading ? (
+          <p className="text-sm text-slate-400">Anschreiben wird vorbereitet…</p>
+        ) : (
+          <form id="travel-letter" className="space-y-5" onSubmit={handleLetterSubmit}>
+            {letterError && <p className="text-sm text-rose-300">{letterError}</p>}
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Betreff
+              <input
+                type="text"
+                value={letterSubject}
+                onChange={(event) => setLetterSubject(event.target.value)}
+                required
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </label>
+            <label className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Text
+              <textarea
+                value={letterBody}
+                onChange={(event) => setLetterBody(event.target.value)}
+                rows={10}
+                required
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+              />
+            </label>
+            {letterPreview && (
+              <div className="grid gap-4 md:grid-cols-2">
+                {(
+                  [
+                    { title: 'Absender', data: letterPreview.sender_contact },
+                    { title: 'Personalabteilung', data: letterPreview.hr_contact },
+                  ] as const
+                ).map(({ title, data }) => {
+                  const hasEntries = CONTACT_ORDER.some((field) => data[field])
+                  return (
+                    <div
+                      key={title}
+                      className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400"
+                    >
+                      <h4 className="text-sm font-semibold text-slate-200">{title}</h4>
+                      {hasEntries ? (
+                        <ul className="mt-2 space-y-1">
+                          {CONTACT_ORDER.filter((field) => data[field])
+                            .map((field) => (
+                              <li key={field} className="flex items-center justify-between gap-2">
+                                <span className="uppercase tracking-wide text-slate-500">{CONTACT_LABELS[field]}</span>
+                                <span className="text-right text-slate-300">{data[field]}</span>
+                              </li>
+                            ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-2 text-slate-500">Keine Angaben hinterlegt.</p>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+            {letterPreview && (
+              <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-400">
+                <h4 className="text-sm font-semibold text-slate-200">Platzhalter-Vorschau</h4>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Werte, die aktuell für die Vorlage eingesetzt werden. Leer bedeutet, dass der Platzhalter beim Ersetzen entfallen kann.
+                </p>
+                <div className="mt-3 grid gap-2 md:grid-cols-2">
+                  {Object.entries(letterPreview.context)
+                    .sort(([a], [b]) => a.localeCompare(b))
+                    .map(([key, value]) => (
+                      <div
+                        key={key}
+                        className="flex items-center justify-between gap-2 rounded-md bg-slate-950/70 px-2 py-1"
+                      >
+                        <code className="text-[11px] text-primary">{`{${key}}`}</code>
+                        <span className="max-w-[60%] truncate text-right text-slate-300">{value || '—'}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+          </form>
+        )}
       </Lightbox>
 
       <Lightbox

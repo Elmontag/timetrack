@@ -4,9 +4,13 @@ import clsx from 'clsx'
 import { API_BASE } from './config'
 import {
   DaySummary,
+  SettingsResponse,
+  TimeDisplayFormat,
   getDaySummaries,
   getSessionsForDay,
+  getSettings,
   pauseSession,
+  createSessionNote,
   startSession,
   stopSession,
   WorkSession,
@@ -35,6 +39,7 @@ export default function App() {
   const [startPlan, setStartPlan] = useState(() => ({
     startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
     comment: '',
+    noteTimestamp: null as string | null,
   }))
   const [currentDay, setCurrentDay] = useState(() => dayjs().format('YYYY-MM-DD'))
   const [daySummary, setDaySummary] = useState<DaySummary | null>(null)
@@ -48,6 +53,17 @@ export default function App() {
     }
     return initial
   })
+  const [dayOverviewRefreshSeconds, setDayOverviewRefreshSeconds] = useState<number>(() => {
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem('tt-day-overview-refresh')
+      const parsed = stored ? Number(stored) : NaN
+      if (Number.isFinite(parsed) && parsed > 0) {
+        return parsed
+      }
+    }
+    return 1
+  })
+  const [timeDisplayFormat, setTimeDisplayFormat] = useState<TimeDisplayFormat>('hh:mm')
 
   const triggerRefresh = useCallback(() => setRefreshKey(Date.now().toString()), [])
   const { run: runStart, loading: starting } = useAsync(startSession)
@@ -65,12 +81,57 @@ export default function App() {
   }, [])
 
   useEffect(() => {
+    const loadSettings = async () => {
+      try {
+        const data = await getSettings()
+        if (data.day_overview_refresh_seconds > 0) {
+          setDayOverviewRefreshSeconds(data.day_overview_refresh_seconds)
+        }
+        if (data.time_display_format) {
+          setTimeDisplayFormat(data.time_display_format)
+        }
+      } catch (error) {
+        console.error('Einstellungen konnten nicht geladen werden', error)
+      }
+    }
+    loadSettings()
+  }, [])
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('tt-day-overview-refresh', dayOverviewRefreshSeconds.toString())
+    }
+  }, [dayOverviewRefreshSeconds])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+    const handler = (event: Event) => {
+      const custom = event as CustomEvent<SettingsResponse>
+      const value = custom.detail?.day_overview_refresh_seconds
+      if (typeof value === 'number' && value > 0) {
+        setDayOverviewRefreshSeconds(value)
+      }
+      const format = custom.detail?.time_display_format
+      if (format === 'hh:mm' || format === 'decimal') {
+        setTimeDisplayFormat(format)
+      }
+    }
+    window.addEventListener('tt-settings-updated', handler as EventListener)
+    return () => window.removeEventListener('tt-settings-updated', handler as EventListener)
+  }, [])
+
+  useEffect(() => {
     if (!activeSession) return
+    const intervalSeconds = Number.isFinite(dayOverviewRefreshSeconds)
+      ? Math.max(1, dayOverviewRefreshSeconds)
+      : 60
     const timer = window.setInterval(() => {
       setRefreshKey(Date.now().toString())
-    }, 60_000)
+    }, intervalSeconds * 1000)
     return () => window.clearInterval(timer)
-  }, [activeSession])
+  }, [activeSession, dayOverviewRefreshSeconds])
 
   const loadSummary = useCallback(async () => {
     const today = dayjs().format('YYYY-MM-DD')
@@ -109,10 +170,32 @@ export default function App() {
         payload.comment = rawComment.trim()
       }
       const session = await runStart(payload)
-      setActiveSession(session)
+      let nextSession: WorkSession = session
+      const plannedNote = startPlan.comment.trim()
+      if (plannedNote) {
+        const plannedTimestamp = startPlan.noteTimestamp
+        const noteCreatedAt = plannedTimestamp
+          ? plannedTimestamp.endsWith('Z')
+            ? plannedTimestamp
+            : dayjs(plannedTimestamp).toISOString()
+          : dayjs().toISOString()
+        try {
+          const note = await createSessionNote(session.id, {
+            content: plannedNote,
+            note_type: 'start',
+            created_at: noteCreatedAt,
+          })
+          const existingNotes = Array.isArray(session.notes) ? session.notes : []
+          nextSession = { ...session, comment: note.content, notes: [...existingNotes, note] }
+        } catch (error) {
+          console.error('Startnotiz konnte nicht gespeichert werden', error)
+        }
+      }
+      setActiveSession(nextSession)
       setStartPlan({
         startTime: dayjs().format('YYYY-MM-DDTHH:mm'),
         comment: '',
+        noteTimestamp: null,
       })
       triggerRefresh()
     },
@@ -138,20 +221,48 @@ export default function App() {
     [runStop, triggerRefresh],
   )
 
+  const activeSessionId = activeSession?.id
+
+  const handleRuntimeNote = useCallback(
+    async (content: string, createdAt?: string) => {
+      if (!activeSessionId) {
+        return
+      }
+      const trimmed = content.trim()
+      if (!trimmed) {
+        return
+      }
+      const iso = createdAt
+        ? createdAt.endsWith('Z')
+          ? createdAt
+          : dayjs(createdAt).toISOString()
+        : dayjs().toISOString()
+      try {
+        const note = await createSessionNote(activeSessionId, {
+          content: trimmed,
+          note_type: 'runtime',
+          created_at: iso,
+        })
+        setActiveSession((prev) => {
+          if (!prev || prev.id !== activeSessionId) {
+            return prev
+          }
+          const existingNotes = Array.isArray(prev.notes) ? prev.notes : []
+          return { ...prev, comment: note.content, notes: [...existingNotes, note] }
+        })
+        triggerRefresh()
+      } catch (error) {
+        console.error('Notiz konnte nicht gespeichert werden', error)
+        throw error
+      }
+    },
+    [activeSessionId, triggerRefresh],
+  )
+
   const content = useMemo(() => {
     switch (activeTab) {
       case 'myday':
-        return (
-          <MyDayPage
-            activeSession={activeSession}
-            startConfig={startPlan}
-            onStartConfigChange={(config) => setStartPlan(config)}
-            onStart={handleStart}
-            onStop={handleStop}
-            refreshKey={refreshKey}
-            triggerRefresh={triggerRefresh}
-          />
-        )
+        return <MyDayPage refreshKey={refreshKey} />
       case 'work':
         return (
           <div className="space-y-6">
@@ -181,9 +292,13 @@ export default function App() {
                 ))}
               </div>
             </div>
-            {workView === 'log' && <SessionList refreshKey={refreshKey} />}
+            {workView === 'log' && (
+              <SessionList refreshKey={refreshKey} timeDisplayFormat={timeDisplayFormat} />
+            )}
             {workView === 'manual' && <ManualEntryForm onCreated={triggerRefresh} />}
-            {workView === 'analysis' && <DaySummaryPanel refreshKey={refreshKey} />}
+            {workView === 'analysis' && (
+              <DaySummaryPanel refreshKey={refreshKey} timeDisplayFormat={timeDisplayFormat} />
+            )}
           </div>
         )
       case 'leave':
@@ -199,7 +314,7 @@ export default function App() {
       default:
         return null
     }
-  }, [activeTab, activeSession, handleStart, handleStop, refreshKey, startPlan, triggerRefresh, workView])
+  }, [activeTab, refreshKey, timeDisplayFormat, triggerRefresh, workView])
 
   return (
     <div
@@ -229,11 +344,14 @@ export default function App() {
             activeSession={activeSession}
             onStart={() => handleStart()}
             onPauseToggle={handlePauseToggle}
-            onStop={() => handleStop()}
+            onStop={handleStop}
             loading={{ start: starting, pause: pausing, stop: stopping }}
             startPlan={startPlan}
+            onStartPlanChange={setStartPlan}
             day={currentDay}
             summary={daySummary}
+            onRuntimeNoteCreate={handleRuntimeNote}
+            timeDisplayFormat={timeDisplayFormat}
           />
           <nav className="flex flex-wrap gap-2">
             {[

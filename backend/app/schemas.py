@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
+
+from typing_extensions import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
@@ -12,6 +14,24 @@ def _serialize_datetime(value: dt.datetime) -> str:
     else:
         value = value.astimezone(dt.timezone.utc)
     return value.isoformat()
+
+class SessionNoteResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    session_id: int
+    note_type: str
+    content: str
+    created_at: dt.datetime
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "note_type": self.note_type,
+            "content": self.content,
+            "created_at": _serialize_datetime(self.created_at),
+        }
 
 
 class WorkSessionBase(BaseModel):
@@ -26,6 +46,7 @@ class WorkSessionBase(BaseModel):
     paused_duration: int
     total_seconds: Optional[int]
     last_pause_start: Optional[dt.datetime]
+    notes: List[SessionNoteResponse] = Field(default_factory=list)
 
     @model_serializer(mode="plain", when_used="json")
     def _serialize(self) -> dict[str, Any]:
@@ -42,6 +63,7 @@ class WorkSessionBase(BaseModel):
             "last_pause_start": _serialize_datetime(self.last_pause_start)
             if self.last_pause_start
             else None,
+            "notes": [note._serialize() for note in self.notes],
         }
 
 
@@ -75,6 +97,12 @@ class WorkSessionUpdateRequest(BaseModel):
     project: Optional[str] = None
     tags: Optional[List[str]] = None
     comment: Optional[str] = None
+
+
+class SessionNoteCreateRequest(BaseModel):
+    content: str
+    note_type: str = Field(default="runtime")
+    created_at: Optional[dt.datetime] = None
 
 
 class WorkToggleResponse(BaseModel):
@@ -288,6 +316,34 @@ class SubtrackCreateRequest(BaseModel):
     note: Optional[str] = None
 
 
+class SubtrackUpdateRequest(BaseModel):
+    day: Optional[dt.date] = None
+    title: Optional[str] = None
+    start_time: Optional[dt.datetime] = None
+    end_time: Optional[dt.datetime] = None
+    project: Optional[str] = None
+    tags: Optional[List[str]] = None
+    note: Optional[str] = None
+
+
+class TravelInvoiceReference(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    document_type: str
+    original_name: str
+    created_at: dt.datetime
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "document_type": self.document_type,
+            "original_name": self.original_name,
+            "created_at": _serialize_datetime(self.created_at),
+        }
+
+
 class TravelDocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -297,6 +353,10 @@ class TravelDocumentResponse(BaseModel):
     original_name: str
     comment: Optional[str]
     signed: bool
+    collection_label: Optional[str] = None
+    linked_invoice_id: Optional[int] = None
+    linked_invoice: Optional[TravelInvoiceReference] = None
+    sort_index: int
     created_at: dt.datetime
 
     @model_serializer(mode="plain", when_used="json")
@@ -308,8 +368,13 @@ class TravelDocumentResponse(BaseModel):
             "original_name": self.original_name,
             "comment": self.comment,
             "signed": self.signed,
+            "collection_label": self.collection_label,
+            "linked_invoice_id": self.linked_invoice_id,
+            "linked_invoice": self.linked_invoice._serialize() if self.linked_invoice else None,
+            "sort_index": self.sort_index,
             "created_at": _serialize_datetime(self.created_at),
             "download_path": f"/travels/{self.trip_id}/documents/{self.id}/download",
+            "open_path": f"/travels/{self.trip_id}/documents/{self.id}/open",
         }
 
 
@@ -382,6 +447,35 @@ class TravelTripUpdateRequest(BaseModel):
 class TravelDocumentUpdateRequest(BaseModel):
     comment: Optional[str] = None
     signed: Optional[bool] = None
+    collection_label: Optional[str] = None
+    linked_invoice_id: Optional[int] = None
+
+
+class TravelDocumentReorderRequest(BaseModel):
+    order: List[int]
+
+    @model_validator(mode="after")
+    def _validate_order(self) -> "TravelDocumentReorderRequest":
+        unique_ids = set(self.order)
+        if not self.order or len(unique_ids) != len(self.order):
+            raise ValueError("Die Reihenfolge muss eindeutige Dokument-IDs enthalten")
+        return self
+
+
+class TravelContact(BaseModel):
+    name: Optional[str] = None
+    company: Optional[str] = None
+    department: Optional[str] = None
+    street: Optional[str] = None
+    postal_code: Optional[str] = None
+    city: Optional[str] = None
+    phone: Optional[str] = None
+    email: Optional[str] = None
+
+
+class TravelLetterTemplate(BaseModel):
+    subject: str
+    body: str
 
 
 class SettingsResponse(BaseModel):
@@ -399,6 +493,11 @@ class SettingsResponse(BaseModel):
     expected_weekly_hours: Optional[float]
     vacation_days_per_year: float
     vacation_days_carryover: float
+    day_overview_refresh_seconds: int
+    time_display_format: Literal["hh:mm", "decimal"]
+    travel_sender_contact: TravelContact
+    travel_hr_contact: TravelContact
+    travel_letter_template: TravelLetterTemplate
 
 
 class SettingsUpdateRequest(BaseModel):
@@ -412,6 +511,24 @@ class SettingsUpdateRequest(BaseModel):
     expected_weekly_hours: Optional[float] = Field(default=None, ge=0)
     vacation_days_per_year: Optional[float] = Field(default=None, ge=0)
     vacation_days_carryover: Optional[float] = Field(default=None)
+    day_overview_refresh_seconds: Optional[int] = Field(default=None, ge=1, le=3600)
+    time_display_format: Optional[Literal["hh:mm", "decimal"]] = None
+    travel_sender_contact: Optional[TravelContact] = None
+    travel_hr_contact: Optional[TravelContact] = None
+    travel_letter_template: Optional[TravelLetterTemplate] = None
+
+
+class TravelLetterPreviewResponse(BaseModel):
+    subject: str
+    body: str
+    context: Dict[str, str]
+    sender_contact: TravelContact
+    hr_contact: TravelContact
+
+
+class TravelLetterCreateRequest(BaseModel):
+    subject: str = Field(min_length=1)
+    body: str = Field(min_length=1)
 
 
 class HolidayResponse(BaseModel):

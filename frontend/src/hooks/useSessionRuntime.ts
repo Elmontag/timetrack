@@ -2,8 +2,20 @@ import dayjs from 'dayjs'
 import { useEffect, useMemo, useState } from 'react'
 import { WorkSession } from '../api'
 
-export function useSessionRuntime(session: WorkSession | null) {
+interface RuntimeDetails {
+  runtime: string
+  status: string
+  workedSeconds: number
+  pausedSeconds: number
+}
+
+interface RuntimeOptions {
+  refreshIntervalMs?: number
+}
+
+export function useSessionRuntime(session: WorkSession | null, options: RuntimeOptions = {}): RuntimeDetails {
   const [tick, setTick] = useState(() => Date.now())
+  const intervalMs = Math.max(250, options.refreshIntervalMs ?? 1000)
 
   useEffect(() => {
     if (!session || session.status === 'stopped') {
@@ -12,35 +24,50 @@ export function useSessionRuntime(session: WorkSession | null) {
     setTick(Date.now())
     const interval = window.setInterval(() => {
       setTick(Date.now())
-    }, 1000)
+    }, intervalMs)
     return () => window.clearInterval(interval)
-  }, [session])
+  }, [session, intervalMs])
 
-  const runtime = useMemo(() => {
-    if (!session || session.status === 'stopped') {
-      return '00:00:00'
+  return useMemo(() => {
+    if (!session) {
+      return {
+        runtime: '00:00:00',
+        status: 'Bereit',
+        workedSeconds: 0,
+        pausedSeconds: 0,
+      }
     }
+
     const now = dayjs(tick)
     const start = dayjs(session.start_time)
-    let pauseSeconds = session.paused_duration || 0
+    const totalElapsed = Math.max(0, now.diff(start, 'second'))
+    let pausedSeconds = session.paused_duration || 0
     if (session.status === 'paused' && session.last_pause_start) {
-      pauseSeconds += now.diff(dayjs(session.last_pause_start), 'second')
+      pausedSeconds += Math.max(0, now.diff(dayjs(session.last_pause_start), 'second'))
     }
-    const elapsed = Math.max(0, now.diff(start, 'second') - pauseSeconds)
-    const hours = Math.floor(elapsed / 3600)
-    const minutes = Math.floor((elapsed % 3600) / 60)
-    const seconds = elapsed % 60
-    return `${hours.toString().padStart(2, '0')}:${minutes
+
+    const workedSeconds = (() => {
+      if (session.status === 'stopped') {
+        return session.total_seconds ?? Math.max(0, totalElapsed - pausedSeconds)
+      }
+      return Math.max(0, totalElapsed - pausedSeconds)
+    })()
+
+    const hours = Math.floor(workedSeconds / 3600)
+    const minutes = Math.floor((workedSeconds % 3600) / 60)
+    const seconds = workedSeconds % 60
+    const runtime = `${hours.toString().padStart(2, '0')}:${minutes
       .toString()
       .padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`
-  }, [session, tick])
 
-  const status = useMemo(() => {
-    if (!session) {
-      return 'Bereit'
+    const status =
+      session.status === 'paused' ? 'Pausiert' : session.status === 'stopped' ? 'Beendet' : 'Laufend'
+
+    return {
+      runtime,
+      status,
+      workedSeconds,
+      pausedSeconds,
     }
-    return session.status === 'paused' ? 'Pausiert' : 'Laufend'
-  }, [session])
-
-  return { runtime, status }
+  }, [session, tick])
 }

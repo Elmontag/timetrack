@@ -19,8 +19,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import cm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
-from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, func, or_
+from sqlalchemy.orm import Session, selectinload
 
 from .config import settings
 from .models import (
@@ -33,6 +33,7 @@ from .models import (
     TravelTrip,
     WorkSession,
     WorkSubtrack,
+    WorkSessionNote,
 )
 from .state import RuntimeState
 from .utils import normalize_calendar_identifier, normalize_calendar_selection
@@ -58,6 +59,8 @@ AUTO_SESSION_COMMENT_PREFIX = "Automatisch aus Termin: "
 
 CALENDAR_EVENT_STATUSES: Set[str] = {"pending", "attended", "absent", "cancelled"}
 
+SESSION_NOTE_TYPES: Set[str] = {"start", "runtime"}
+
 TRAVEL_WORKFLOW_STATES: Dict[str, str] = {
     "request_draft": "Dienstreiseantrag",
     "requested": "Dienstreise beantragt",
@@ -72,11 +75,21 @@ TRAVEL_DOCUMENT_TYPES: Set[str] = {
     "Beleg",
     "Reisekostenabrechnung",
     "Sonstige Unterlagen",
+    "Anschreiben",
 }
 
-TRAVEL_DATASET_DOCUMENT_TYPES: Set[str] = {"Rechnung", "Beleg", "Reisekostenabrechnung"}
+TRAVEL_DATASET_DOCUMENT_TYPES: Set[str] = {"Rechnung", "Beleg", "Reisekostenabrechnung", "Anschreiben"}
 
 SIGNABLE_DOCUMENT_TYPES: Set[str] = {"Antrag", "Reisekostenabrechnung"}
+
+UNSET: Any = object()
+
+
+def _normalize_collection_label(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
 
 
 def _now() -> dt.datetime:
@@ -87,6 +100,16 @@ def _ensure_utc(value: dt.datetime) -> dt.datetime:
     if value.tzinfo is None:
         value = value.replace(tzinfo=LOCAL_TZ)
     return value.astimezone(UTC)
+
+
+def _normalize_note_timestamp(value: Optional[dt.datetime]) -> dt.datetime:
+    if value is None:
+        return _now()
+    if value.tzinfo is None:
+        localized = value.replace(tzinfo=LOCAL_TZ)
+    else:
+        localized = value.astimezone(LOCAL_TZ)
+    return localized.astimezone(UTC)
 
 
 def _day_bounds(day: dt.date) -> Tuple[dt.datetime, dt.datetime]:
@@ -606,6 +629,35 @@ def stop_session(db: Session, state: RuntimeState, comment: Optional[str] = None
     return session
 
 
+def add_session_note(
+    db: Session,
+    session_id: int,
+    content: str,
+    note_type: str,
+    created_at: Optional[dt.datetime] = None,
+) -> WorkSessionNote:
+    session = db.get(WorkSession, session_id)
+    if session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    text = (content or "").strip()
+    if not text:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Notiz darf nicht leer sein")
+    normalized_type = note_type if note_type in SESSION_NOTE_TYPES else "runtime"
+    timestamp = _normalize_note_timestamp(created_at)
+    note = WorkSessionNote(
+        session=session,
+        content=text,
+        note_type=normalized_type,
+        created_at=timestamp,
+    )
+    db.add(note)
+    session.comment = text
+    db.commit()
+    db.refresh(note)
+    db.refresh(session)
+    return note
+
+
 def create_manual_session(
     db: Session,
     state: RuntimeState,
@@ -694,8 +746,8 @@ def _ensure_session_for_subtrack(
     return _ensure_session_for_span(
         db,
         state,
-        subtrack.start_time,
-        subtrack.end_time,
+        _from_db_datetime(subtrack.start_time),
+        _from_db_datetime(subtrack.end_time),
         title,
         subtrack.project,
         list(subtrack.tags or []),
@@ -703,10 +755,41 @@ def _ensure_session_for_subtrack(
     )
 
 
+def _remove_auto_session(
+    db: Session,
+    state: RuntimeState,
+    start_time: Optional[dt.datetime],
+    end_time: Optional[dt.datetime],
+    title: str,
+    note: Optional[str],
+) -> Optional[dt.date]:
+    start_utc = _from_db_datetime(start_time)
+    end_utc = _from_db_datetime(end_time)
+    if start_utc is None or end_utc is None:
+        return None
+    auto_comment = _auto_session_comment(title, note)
+    session = (
+        db.query(WorkSession)
+        .filter(
+            WorkSession.start_time == start_utc,
+            WorkSession.stop_time == end_utc,
+            WorkSession.comment == auto_comment,
+        )
+        .one_or_none()
+    )
+    if session is None:
+        return None
+    day = start_utc.astimezone(LOCAL_TZ).date()
+    db.delete(session)
+    update_day_summary(db, day, state)
+    return day
+
+
 def list_sessions_for_day(db: Session, day: dt.date) -> List[WorkSession]:
     start, end = _day_bounds(day)
     sessions = (
         db.query(WorkSession)
+        .options(selectinload(WorkSession.notes))
         .filter(and_(WorkSession.start_time >= start, WorkSession.start_time < end))
         .order_by(WorkSession.start_time.asc())
         .all()
@@ -959,6 +1042,62 @@ def list_subtracks(db: Session, day: dt.date) -> List[WorkSubtrack]:
         .order_by(WorkSubtrack.start_time.asc(), WorkSubtrack.created_at.asc())
         .all()
     )
+
+
+def update_subtrack(
+    db: Session,
+    state: RuntimeState,
+    subtrack_id: int,
+    changes: Dict[str, Any],
+) -> WorkSubtrack:
+    subtrack = db.get(WorkSubtrack, subtrack_id)
+    if not subtrack:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subtrack not found")
+
+    original_day = subtrack.day
+    _remove_auto_session(db, state, subtrack.start_time, subtrack.end_time, subtrack.title, subtrack.note)
+
+    if "day" in changes and changes["day"] is not None:
+        subtrack.day = changes["day"]
+    if "title" in changes and changes["title"] is not None:
+        subtrack.title = changes["title"]
+    if "start_time" in changes:
+        value = changes["start_time"]
+        subtrack.start_time = _ensure_utc(value) if value else None
+    if "end_time" in changes:
+        value = changes["end_time"]
+        subtrack.end_time = _ensure_utc(value) if value else None
+    if "project" in changes:
+        subtrack.project = changes["project"]
+    if "tags" in changes and changes["tags"] is not None:
+        subtrack.tags = changes["tags"]
+    if "note" in changes:
+        subtrack.note = changes["note"]
+
+    db.add(subtrack)
+    db.commit()
+    db.refresh(subtrack)
+
+    _ensure_session_for_subtrack(db, state, subtrack)
+
+    affected_days: Set[dt.date] = {original_day, subtrack.day}
+    for day in affected_days:
+        update_day_summary(db, day, state)
+    return subtrack
+
+
+def delete_subtrack(db: Session, state: RuntimeState, subtrack_id: int) -> None:
+    subtrack = db.get(WorkSubtrack, subtrack_id)
+    if not subtrack:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Subtrack not found")
+
+    day = subtrack.day
+    _remove_auto_session(db, state, subtrack.start_time, subtrack.end_time, subtrack.title, subtrack.note)
+
+    db.delete(subtrack)
+    db.commit()
+
+    update_day_summary(db, day, state)
 
 
 def create_leave(
@@ -1315,6 +1454,11 @@ def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> 
                 "expected_weekly_hours",
                 "vacation_days_per_year",
                 "vacation_days_carryover",
+                "day_overview_refresh_seconds",
+                "time_display_format",
+                "travel_sender_contact",
+                "travel_hr_contact",
+                "travel_letter_template",
             }
         },
     )
@@ -1523,6 +1667,221 @@ def _sanitize_filename(name: str) -> str:
     return normalized or "dokument"
 
 
+def _format_contact_block(contact: Dict[str, str]) -> List[str]:
+    lines: List[str] = []
+    for key in ("name", "company", "department"):
+        value = contact.get(key, "").strip()
+        if value:
+            lines.append(value)
+    street = contact.get("street", "").strip()
+    if street:
+        lines.append(street)
+    postal = contact.get("postal_code", "").strip()
+    city = contact.get("city", "").strip()
+    city_line = " ".join(part for part in (postal, city) if part)
+    if city_line:
+        lines.append(city_line)
+    phone = contact.get("phone", "").strip()
+    if phone:
+        lines.append(f"Telefon: {phone}")
+    email = contact.get("email", "").strip()
+    if email:
+        lines.append(email)
+    return lines
+
+
+def _build_letter_context(state: RuntimeState, trip: TravelTrip) -> Dict[str, str]:
+    sender = dict(state.travel_sender_contact)
+    hr = dict(state.travel_hr_contact)
+    now_local = _now().astimezone(LOCAL_TZ)
+    context: Dict[str, str] = defaultdict(str)  # type: ignore[assignment]
+
+    for key, value in sender.items():
+        context[f"sender_{key}"] = value
+    for key, value in hr.items():
+        context[f"hr_{key}"] = value
+
+    context.update(
+        sender_name=sender.get("name", ""),
+        sender_company=sender.get("company", ""),
+        sender_department=sender.get("department", ""),
+        sender_street=sender.get("street", ""),
+        sender_postal_code=sender.get("postal_code", ""),
+        sender_city=sender.get("city", ""),
+        sender_phone=sender.get("phone", ""),
+        sender_email=sender.get("email", ""),
+        hr_name=hr.get("name", ""),
+        hr_company=hr.get("company", ""),
+        hr_department=hr.get("department", ""),
+        hr_street=hr.get("street", ""),
+        hr_postal_code=hr.get("postal_code", ""),
+        hr_city=hr.get("city", ""),
+        hr_phone=hr.get("phone", ""),
+        hr_email=hr.get("email", ""),
+        today_date=now_local.strftime("%d.%m.%Y"),
+        trip_title=trip.title,
+        trip_destination=trip.destination or "",
+        trip_purpose=trip.purpose or "",
+        trip_start_date=trip.start_date.strftime("%d.%m.%Y"),
+        trip_end_date=trip.end_date.strftime("%d.%m.%Y"),
+    )
+
+    duration_days = (trip.end_date - trip.start_date).days + 1
+    context["trip_duration_days"] = str(duration_days)
+    period = f"{trip.start_date.strftime('%d.%m.%Y')} – {trip.end_date.strftime('%d.%m.%Y')}"
+    context["trip_period"] = period
+
+    destination = trip.destination or ""
+    if destination:
+        context["trip_destination_clause"] = f"nach {destination}"
+    else:
+        context["trip_destination_clause"] = ""
+
+    purpose = trip.purpose or ""
+    if purpose:
+        context["trip_purpose_clause"] = f"wegen {purpose}"
+    else:
+        context["trip_purpose_clause"] = ""
+
+    sender_block = "\n".join(_format_contact_block(sender)).strip()
+    hr_block = "\n".join(_format_contact_block(hr)).strip()
+    context["sender_block"] = sender_block
+    context["hr_block"] = hr_block
+
+    return context
+
+
+def _render_letter_template(template: str, context: Dict[str, str]) -> str:
+    if not template:
+        return ""
+    safe_context: defaultdict[str, str] = defaultdict(str)  # type: ignore[assignment]
+    safe_context.update(context)
+    try:
+        rendered = template.format_map(safe_context)
+    except Exception:
+        return template
+    return rendered
+
+
+def generate_travel_letter_preview(db: Session, state: RuntimeState, trip_id: int) -> Dict[str, Any]:
+    trip = _get_travel_trip(db, trip_id)
+    context = _build_letter_context(state, trip)
+    template = state.travel_letter_template
+    subject = _render_letter_template(template.get("subject", ""), context).strip()
+    body = _render_letter_template(template.get("body", ""), context)
+    body = body.replace("\r\n", "\n").strip()
+    return {
+        "subject": subject or template.get("subject", ""),
+        "body": body or template.get("body", ""),
+        "context": dict(context),
+        "sender_contact": dict(state.travel_sender_contact),
+        "hr_contact": dict(state.travel_hr_contact),
+    }
+
+
+def _render_travel_letter_pdf(
+    trip: TravelTrip,
+    subject: str,
+    body: str,
+    sender_contact: Dict[str, str],
+    hr_contact: Dict[str, str],
+) -> bytes:
+    buffer = io.BytesIO()
+    page = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    page.setTitle(f"Anschreiben {trip.title}")
+    top_margin = height - 2.5 * cm
+    y = top_margin
+
+    def ensure_space(current_y: float, required: float, font: tuple[str, int]) -> float:
+        if current_y - required < 2 * cm:
+            page.showPage()
+            page.setFont(font[0], font[1])
+            return height - 2 * cm
+        return current_y
+
+    page.setFont("Helvetica", 9)
+    for line in _format_contact_block(sender_contact):
+        if not line:
+            continue
+        y = ensure_space(y, 0.5 * cm, ("Helvetica", 9))
+        page.drawString(2 * cm, y, line)
+        y -= 0.5 * cm
+
+    y -= 0.7 * cm
+    page.setFont("Helvetica", 11)
+    for line in _format_contact_block(hr_contact):
+        if not line:
+            continue
+        y = ensure_space(y, 0.6 * cm, ("Helvetica", 11))
+        page.drawString(2 * cm, y, line)
+        y -= 0.6 * cm
+
+    now_local = _now().astimezone(LOCAL_TZ)
+    date_label = now_local.strftime("%d.%m.%Y")
+    y -= 0.6 * cm
+    page.setFont("Helvetica", 11)
+    page.drawString(2 * cm, y, date_label)
+    y -= 1.0 * cm
+
+    subject_text = subject.strip()
+    if subject_text:
+        page.setFont("Helvetica-Bold", 12)
+        page.drawString(2 * cm, y, f"Betreff: {subject_text}")
+        y -= 1.2 * cm
+
+    page.setFont("Helvetica", 11)
+    line_height = 0.65 * cm
+    paragraphs = body.replace("\r\n", "\n").split("\n\n") if body else []
+
+    for paragraph in paragraphs:
+        lines = paragraph.split("\n") if paragraph else [""]
+        for line in lines:
+            chunks = _wrap_text(line.strip(), 88) or [""]
+            for chunk in chunks:
+                y = ensure_space(y, line_height, ("Helvetica", 11))
+                page.drawString(2 * cm, y, chunk)
+                y -= line_height
+        y -= 0.4 * cm
+
+    page.save()
+    buffer.seek(0)
+    return buffer.read()
+
+
+def create_travel_letter_document(
+    db: Session,
+    state: RuntimeState,
+    trip_id: int,
+    subject: str,
+    body: str,
+) -> TravelDocument:
+    cleaned_subject = subject.strip()
+    cleaned_body = body.replace("\r\n", "\n").strip()
+    if not cleaned_subject or not cleaned_body:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Betreff und Text dürfen nicht leer sein")
+    trip = _get_travel_trip(db, trip_id)
+    pdf_bytes = _render_travel_letter_pdf(
+        trip,
+        cleaned_subject,
+        cleaned_body,
+        state.travel_sender_contact,
+        state.travel_hr_contact,
+    )
+    timestamp = _now().astimezone(LOCAL_TZ).strftime("%Y%m%d_%H%M%S")
+    original_name = f"Anschreiben_{trip.start_date}_{trip.id}_{timestamp}.pdf"
+    comment = f"Automatisch erstellt am {dt.datetime.now(LOCAL_TZ).strftime('%d.%m.%Y %H:%M')}"
+    document = add_travel_document(
+        db,
+        trip.id,
+        "Anschreiben",
+        original_name,
+        pdf_bytes,
+        comment,
+    )
+    return document
+
+
 def _get_travel_trip(db: Session, trip_id: int) -> TravelTrip:
     trip = db.query(TravelTrip).filter(TravelTrip.id == trip_id).one_or_none()
     if not trip:
@@ -1624,6 +1983,8 @@ def add_travel_document(
     original_name: str,
     content: bytes,
     comment: Optional[str],
+    collection_label: Optional[str] = None,
+    linked_invoice_id: Optional[int] = None,
 ) -> TravelDocument:
     if document_type not in TRAVEL_DOCUMENT_TYPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unbekannter Dokumenttyp")
@@ -1634,13 +1995,38 @@ def add_travel_document(
     stored_path = directory / stored_name
     with stored_path.open("wb") as handle:
         handle.write(content)
+    normalized_label = _normalize_collection_label(collection_label)
+    linked_invoice: Optional[TravelDocument] = None
+    if linked_invoice_id is not None:
+        invoice = _get_travel_document(db, trip_id, linked_invoice_id)
+        if invoice.document_type != "Rechnung":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Verknüpfungen sind nur mit Rechnungen möglich",
+            )
+        if document_type == "Rechnung":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Rechnungen können nicht mit anderen Rechnungen verknüpft werden",
+            )
+        linked_invoice = invoice
+    next_index = (
+        db.query(func.max(TravelDocument.sort_index))
+        .filter(TravelDocument.trip_id == trip.id)
+        .scalar()
+    )
+    sort_index = (next_index or 0) + 1 if next_index is not None else 0
     document = TravelDocument(
         trip=trip,
         document_type=document_type,
         stored_path=str(stored_path),
         original_name=original_name or stored_name,
         comment=comment,
+        collection_label=normalized_label,
+        sort_index=sort_index,
     )
+    if linked_invoice is not None:
+        document.linked_invoice = linked_invoice
     db.add(document)
     db.commit()
     db.refresh(document)
@@ -1663,25 +2049,89 @@ def update_travel_document(
     trip_id: int,
     document_id: int,
     *,
-    comment: Optional[str] = None,
-    signed: Optional[bool] = None,
+    comment: Any = UNSET,
+    signed: Any = UNSET,
+    collection_label: Any = UNSET,
+    linked_invoice_id: Any = UNSET,
 ) -> TravelDocument:
     document = _get_travel_document(db, trip_id, document_id)
-    if comment is not None:
+    if comment is not UNSET:
         document.comment = comment
-    if signed is not None:
+    if signed is not UNSET:
         if document.document_type not in SIGNABLE_DOCUMENT_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dokument kann nicht signiert werden")
         document.signed = signed
+    if collection_label is not UNSET:
+        document.collection_label = _normalize_collection_label(collection_label)
+    if linked_invoice_id is not UNSET:
+        if document.document_type == "Rechnung" and linked_invoice_id not in (None, document.id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Rechnungen können nicht mit anderen Rechnungen verknüpft werden",
+            )
+        if linked_invoice_id is None:
+            document.linked_invoice = None
+        else:
+            invoice = _get_travel_document(db, trip_id, linked_invoice_id)
+            if invoice.document_type != "Rechnung":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Verknüpfungen sind nur mit Rechnungen möglich",
+                )
+            if invoice.id == document.id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Ein Dokument kann nicht mit sich selbst verknüpft werden",
+                )
+            document.linked_invoice = invoice
     db.add(document)
     db.commit()
     db.refresh(document)
     return document
 
 
+def reorder_travel_documents(db: Session, trip_id: int, ordered_ids: List[int]) -> TravelTrip:
+    trip = _get_travel_trip(db, trip_id)
+    existing_ids = [document.id for document in trip.documents]
+    if not ordered_ids:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Es wurden keine Dokumente zur Neuanordnung übermittelt",
+        )
+    if len(ordered_ids) != len(existing_ids) or set(ordered_ids) != set(existing_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Die übermittelte Reihenfolge stimmt nicht mit den vorhandenen Dokumenten überein",
+        )
+    documents_by_id = {document.id: document for document in trip.documents}
+    for position, document_id in enumerate(ordered_ids):
+        document = documents_by_id.get(document_id)
+        if document is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unbekanntes Dokument in der Reihenfolge entdeckt",
+            )
+        document.sort_index = position
+        db.add(document)
+    db.commit()
+    db.refresh(trip)
+    db.expire(trip, ["documents"])
+    _ = trip.documents  # force reload with updated order
+    return trip
+
+
 def delete_travel_document(db: Session, trip_id: int, document_id: int) -> None:
     document = _get_travel_document(db, trip_id, document_id)
     stored_path = Path(document.stored_path)
+    if document.document_type == "Rechnung":
+        linked = (
+            db.query(TravelDocument)
+            .filter(TravelDocument.trip_id == trip_id, TravelDocument.linked_invoice_id == document.id)
+            .all()
+        )
+        for receipt in linked:
+            receipt.linked_invoice = None
+            db.add(receipt)
     db.delete(document)
     db.commit()
     if stored_path.exists():
@@ -1727,7 +2177,11 @@ def _collect_travel_dataset_documents(db: Session, trip_id: int) -> Tuple[Travel
             TravelDocument.trip_id == trip.id,
             TravelDocument.document_type.in_(TRAVEL_DATASET_DOCUMENT_TYPES),
         )
-        .order_by(TravelDocument.created_at.asc(), TravelDocument.id.asc())
+        .order_by(
+            TravelDocument.sort_index.asc(),
+            TravelDocument.created_at.asc(),
+            TravelDocument.id.asc(),
+        )
         .all()
     )
     return trip, documents
@@ -1760,7 +2214,12 @@ def _render_dataset_cover_page(trip: TravelTrip, documents: List[TravelDocument]
     text.setFont("Helvetica", 10)
     if documents:
         for document in documents:
-            label = f"- {document.document_type}: {document.original_name}"
+            parts = [f"{document.document_type}: {document.original_name}"]
+            if document.collection_label:
+                parts.insert(0, f"[{document.collection_label}]")
+            if document.linked_invoice and document.document_type != "Rechnung":
+                parts.append(f"(Rechnung: {document.linked_invoice.original_name})")
+            label = "- " + " ".join(parts)
             for wrapped in _wrap_text(label, 88):
                 text.textLine(wrapped)
     else:
@@ -1779,18 +2238,28 @@ def _render_dataset_image_page(document: TravelDocument, path: Path) -> io.Bytes
     page.setFont("Helvetica-Bold", 13)
     page.drawString(2 * cm, height - 2.5 * cm, f"{document.document_type}: {document.original_name}")
     page.setFont("Helvetica", 9)
-    page.drawString(2 * cm, height - 3.2 * cm, f"Datei: {path.name}")
+    info_y = height - 3.2 * cm
+    page.drawString(2 * cm, info_y, f"Datei: {path.name}")
+    info_y -= 0.5 * cm
+    if document.collection_label:
+        page.drawString(2 * cm, info_y, f"Sammelbegriff: {document.collection_label}")
+        info_y -= 0.5 * cm
+    if document.linked_invoice and document.document_type != "Rechnung":
+        page.drawString(2 * cm, info_y, f"Verknüpfte Rechnung: {document.linked_invoice.original_name}")
+        info_y -= 0.5 * cm
     image = ImageReader(str(path))
     img_width, img_height = image.getSize()
     if img_width <= 0 or img_height <= 0:
         raise ValueError("Ungültige Bildabmessungen")
     available_width = width - 4 * cm
-    available_height = height - 6 * cm
+    top_limit = max(info_y - 0.5 * cm, 6 * cm)
+    bottom_margin = 2 * cm
+    available_height = max(top_limit - bottom_margin, 4 * cm)
     scale = min(available_width / img_width, available_height / img_height, 1.0)
     draw_width = img_width * scale
     draw_height = img_height * scale
     x = (width - draw_width) / 2
-    y = max((height - draw_height) / 2 - 0.5 * cm, 2 * cm)
+    y = bottom_margin + max((available_height - draw_height) / 2, 0)
     page.drawImage(image, x, y, width=draw_width, height=draw_height, preserveAspectRatio=True, mask="auto")
     page.showPage()
     page.save()
@@ -1808,6 +2277,10 @@ def _render_dataset_placeholder_page(document: TravelDocument, message: str) -> 
     text = page.beginText(2 * cm, height - 4 * cm)
     text.textLine(f"Dokumenttyp: {document.document_type}")
     text.textLine(f"Originaldatei: {document.original_name}")
+    if document.collection_label:
+        text.textLine(f"Sammelbegriff: {document.collection_label}")
+    if document.linked_invoice and document.document_type != "Rechnung":
+        text.textLine(f"Verknüpfte Rechnung: {document.linked_invoice.original_name}")
     text.textLine("")
     for wrapped in _wrap_text(message, 90):
         text.textLine(wrapped)

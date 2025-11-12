@@ -1,14 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import dayjs from 'dayjs'
-import { DaySummary, getDaySummaries } from '../api'
+import { DaySummary, TimeDisplayFormat, getDaySummaries } from '../api'
+import { formatSeconds } from '../utils/timeFormat'
 
 interface Props {
   refreshKey: string
+  timeDisplayFormat: TimeDisplayFormat
 }
 
 type ViewMode = 'day' | 'month' | 'year'
 
-export function DaySummaryPanel({ refreshKey }: Props) {
+export function DaySummaryPanel({ refreshKey, timeDisplayFormat }: Props) {
   const [view, setView] = useState<ViewMode>('day')
   const [day, setDay] = useState(dayjs().format('YYYY-MM-DD'))
   const [month, setMonth] = useState(dayjs().format('YYYY-MM'))
@@ -100,7 +102,13 @@ export function DaySummaryPanel({ refreshKey }: Props) {
     return Array.from(grouped.values())
   }, [summaries, view])
 
-  const formatHours = (seconds: number) => (seconds / 3600).toFixed(1).replace('.', ',') + ' h'
+  const includeUnit = timeDisplayFormat === 'decimal'
+  const decimalPlaces = timeDisplayFormat === 'decimal' ? 1 : undefined
+  const formatHours = (seconds: number) =>
+    formatSeconds(seconds, timeDisplayFormat, {
+      includeUnit,
+      decimalPlaces,
+    })
   const formatDays = (value: number) => `${value.toFixed(1).replace('.', ',')} Tage`
 
   const viewTitle = view === 'day' ? 'Tagesübersicht' : view === 'month' ? 'Monatsübersicht' : 'Jahresanalyse'

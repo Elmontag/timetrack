@@ -1,12 +1,26 @@
 from __future__ import annotations
 
 import ipaddress
+import json
 import os
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from pydantic import Field, computed_field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+DEFAULT_TRAVEL_LETTER_TEMPLATE: Dict[str, str] = {
+    "subject": "Reisekostenabrechnung {trip_title}",
+    "body": (
+        "Sehr geehrte Damen und Herren,\n\n"
+        "anbei übersende ich die Reisekostenabrechnung für die Dienstreise {trip_destination_clause}"
+        " ({trip_period}). Bitte veranlassen Sie die weitere Bearbeitung.\n\n"
+        "Vielen Dank. Bei Rückfragen stehe ich gerne zur Verfügung.\n\n"
+        "Mit freundlichen Grüßen\n"
+        "{sender_name}"
+    ),
+}
 
 
 class Settings(BaseSettings):
@@ -31,6 +45,22 @@ class Settings(BaseSettings):
     export_xlsx_engine: str = os.getenv("TT_EXPORT_XLSX_ENGINE", "openpyxl")
 
     travel_dir: Path = Path(os.getenv("TT_TRAVEL_DIR", "/data/travel"))
+
+    travel_sender_contact: Dict[str, str] = Field(
+        default_factory=lambda: json.loads(os.getenv("TT_TRAVEL_SENDER_CONTACT", "{}") or "{}")
+    )
+    travel_hr_contact: Dict[str, str] = Field(
+        default_factory=lambda: json.loads(os.getenv("TT_TRAVEL_HR_CONTACT", "{}") or "{}")
+    )
+    travel_letter_template: Dict[str, str] = Field(
+        default_factory=lambda: {
+            **DEFAULT_TRAVEL_LETTER_TEMPLATE,
+            **json.loads(os.getenv("TT_TRAVEL_LETTER_TEMPLATE", "{}") or "{}"),
+        }
+    )
+
+    day_overview_refresh_seconds: int = int(os.getenv("TT_DAY_OVERVIEW_REFRESH_SECONDS", "1"))
+    time_display_format: str = os.getenv("TT_TIME_DISPLAY_FORMAT", "hh:mm")
 
     caldav_url: Optional[str] = os.getenv("TT_CALDAV_URL")
     caldav_user: Optional[str] = os.getenv("TT_CALDAV_USER")

@@ -35,6 +35,12 @@ class WorkSession(Base):
     last_pause_start = Column(DateTime(timezone=True), nullable=True)
     total_seconds = Column(Integer, nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+    notes = relationship(
+        "WorkSessionNote",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="WorkSessionNote.created_at, WorkSessionNote.id",
+    )
 
     def mark_paused(self, now: dt.datetime) -> None:
         if self.status == "paused":
@@ -68,6 +74,18 @@ class WorkSession(Base):
         effective = duration.total_seconds() - self.paused_duration
         self.total_seconds = max(int(effective), 0)
         self.status = "stopped"
+
+
+class WorkSessionNote(Base):
+    __tablename__ = "work_session_notes"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("work_sessions.id"), nullable=False, index=True)
+    note_type = Column(String(20), nullable=False, default="runtime")
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
+
+    session = relationship("WorkSession", back_populates="notes")
 
 
 class DaySummary(Base):
@@ -174,7 +192,7 @@ class TravelTrip(Base):
         "TravelDocument",
         back_populates="trip",
         cascade="all, delete-orphan",
-        order_by="TravelDocument.created_at",
+        order_by="TravelDocument.sort_index, TravelDocument.created_at, TravelDocument.id",
     )
 
 
@@ -188,9 +206,18 @@ class TravelDocument(Base):
     original_name = Column(String(255), nullable=False)
     comment = Column(Text, nullable=True)
     signed = Column(Boolean, nullable=False, default=False)
+    collection_label = Column(String(120), nullable=True)
+    linked_invoice_id = Column(Integer, ForeignKey("travel_documents.id"), nullable=True, index=True)
+    sort_index = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     trip = relationship("TravelTrip", back_populates="documents")
+    linked_invoice = relationship(
+        "TravelDocument",
+        remote_side=[id],
+        backref="linked_documents",
+        foreign_keys=[linked_invoice_id],
+    )
 
 
 class WorkSubtrack(Base):
