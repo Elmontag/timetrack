@@ -188,9 +188,17 @@ class TravelDocument(Base):
     original_name = Column(String(255), nullable=False)
     comment = Column(Text, nullable=True)
     signed = Column(Boolean, nullable=False, default=False)
+    collection_label = Column(String(120), nullable=True)
+    linked_invoice_id = Column(Integer, ForeignKey("travel_documents.id"), nullable=True, index=True)
     created_at = Column(DateTime(timezone=True), default=utcnow, nullable=False)
 
     trip = relationship("TravelTrip", back_populates="documents")
+    linked_invoice = relationship(
+        "TravelDocument",
+        remote_side=[id],
+        backref="linked_documents",
+        foreign_keys=[linked_invoice_id],
+    )
 
 
 class WorkSubtrack(Base):

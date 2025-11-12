@@ -79,6 +79,15 @@ TRAVEL_DATASET_DOCUMENT_TYPES: Set[str] = {"Rechnung", "Beleg", "Reisekostenabre
 
 SIGNABLE_DOCUMENT_TYPES: Set[str] = {"Antrag", "Reisekostenabrechnung"}
 
+UNSET: Any = object()
+
+
+def _normalize_collection_label(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
 
 def _now() -> dt.datetime:
     return dt.datetime.now(UTC)
@@ -1843,6 +1852,8 @@ def add_travel_document(
     original_name: str,
     content: bytes,
     comment: Optional[str],
+    collection_label: Optional[str] = None,
+    linked_invoice_id: Optional[int] = None,
 ) -> TravelDocument:
     if document_type not in TRAVEL_DOCUMENT_TYPES:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unbekannter Dokumenttyp")
@@ -1853,13 +1864,31 @@ def add_travel_document(
     stored_path = directory / stored_name
     with stored_path.open("wb") as handle:
         handle.write(content)
+    normalized_label = _normalize_collection_label(collection_label)
+    linked_invoice: Optional[TravelDocument] = None
+    if linked_invoice_id is not None:
+        invoice = _get_travel_document(db, trip_id, linked_invoice_id)
+        if invoice.document_type != "Rechnung":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Verknüpfungen sind nur mit Rechnungen möglich",
+            )
+        if document_type == "Rechnung":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Rechnungen können nicht mit anderen Rechnungen verknüpft werden",
+            )
+        linked_invoice = invoice
     document = TravelDocument(
         trip=trip,
         document_type=document_type,
         stored_path=str(stored_path),
         original_name=original_name or stored_name,
         comment=comment,
+        collection_label=normalized_label,
     )
+    if linked_invoice is not None:
+        document.linked_invoice = linked_invoice
     db.add(document)
     db.commit()
     db.refresh(document)
@@ -1882,16 +1911,41 @@ def update_travel_document(
     trip_id: int,
     document_id: int,
     *,
-    comment: Optional[str] = None,
-    signed: Optional[bool] = None,
+    comment: Any = UNSET,
+    signed: Any = UNSET,
+    collection_label: Any = UNSET,
+    linked_invoice_id: Any = UNSET,
 ) -> TravelDocument:
     document = _get_travel_document(db, trip_id, document_id)
-    if comment is not None:
+    if comment is not UNSET:
         document.comment = comment
-    if signed is not None:
+    if signed is not UNSET:
         if document.document_type not in SIGNABLE_DOCUMENT_TYPES:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Dokument kann nicht signiert werden")
         document.signed = signed
+    if collection_label is not UNSET:
+        document.collection_label = _normalize_collection_label(collection_label)
+    if linked_invoice_id is not UNSET:
+        if document.document_type == "Rechnung" and linked_invoice_id not in (None, document.id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Rechnungen können nicht mit anderen Rechnungen verknüpft werden",
+            )
+        if linked_invoice_id is None:
+            document.linked_invoice = None
+        else:
+            invoice = _get_travel_document(db, trip_id, linked_invoice_id)
+            if invoice.document_type != "Rechnung":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Verknüpfungen sind nur mit Rechnungen möglich",
+                )
+            if invoice.id == document.id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Ein Dokument kann nicht mit sich selbst verknüpft werden",
+                )
+            document.linked_invoice = invoice
     db.add(document)
     db.commit()
     db.refresh(document)
@@ -1901,6 +1955,15 @@ def update_travel_document(
 def delete_travel_document(db: Session, trip_id: int, document_id: int) -> None:
     document = _get_travel_document(db, trip_id, document_id)
     stored_path = Path(document.stored_path)
+    if document.document_type == "Rechnung":
+        linked = (
+            db.query(TravelDocument)
+            .filter(TravelDocument.trip_id == trip_id, TravelDocument.linked_invoice_id == document.id)
+            .all()
+        )
+        for receipt in linked:
+            receipt.linked_invoice = None
+            db.add(receipt)
     db.delete(document)
     db.commit()
     if stored_path.exists():
@@ -1979,7 +2042,12 @@ def _render_dataset_cover_page(trip: TravelTrip, documents: List[TravelDocument]
     text.setFont("Helvetica", 10)
     if documents:
         for document in documents:
-            label = f"- {document.document_type}: {document.original_name}"
+            parts = [f"{document.document_type}: {document.original_name}"]
+            if document.collection_label:
+                parts.insert(0, f"[{document.collection_label}]")
+            if document.linked_invoice and document.document_type != "Rechnung":
+                parts.append(f"(Rechnung: {document.linked_invoice.original_name})")
+            label = "- " + " ".join(parts)
             for wrapped in _wrap_text(label, 88):
                 text.textLine(wrapped)
     else:
@@ -1998,18 +2066,28 @@ def _render_dataset_image_page(document: TravelDocument, path: Path) -> io.Bytes
     page.setFont("Helvetica-Bold", 13)
     page.drawString(2 * cm, height - 2.5 * cm, f"{document.document_type}: {document.original_name}")
     page.setFont("Helvetica", 9)
-    page.drawString(2 * cm, height - 3.2 * cm, f"Datei: {path.name}")
+    info_y = height - 3.2 * cm
+    page.drawString(2 * cm, info_y, f"Datei: {path.name}")
+    info_y -= 0.5 * cm
+    if document.collection_label:
+        page.drawString(2 * cm, info_y, f"Sammelbegriff: {document.collection_label}")
+        info_y -= 0.5 * cm
+    if document.linked_invoice and document.document_type != "Rechnung":
+        page.drawString(2 * cm, info_y, f"Verknüpfte Rechnung: {document.linked_invoice.original_name}")
+        info_y -= 0.5 * cm
     image = ImageReader(str(path))
     img_width, img_height = image.getSize()
     if img_width <= 0 or img_height <= 0:
         raise ValueError("Ungültige Bildabmessungen")
     available_width = width - 4 * cm
-    available_height = height - 6 * cm
+    top_limit = max(info_y - 0.5 * cm, 6 * cm)
+    bottom_margin = 2 * cm
+    available_height = max(top_limit - bottom_margin, 4 * cm)
     scale = min(available_width / img_width, available_height / img_height, 1.0)
     draw_width = img_width * scale
     draw_height = img_height * scale
     x = (width - draw_width) / 2
-    y = max((height - draw_height) / 2 - 0.5 * cm, 2 * cm)
+    y = bottom_margin + max((available_height - draw_height) / 2, 0)
     page.drawImage(image, x, y, width=draw_width, height=draw_height, preserveAspectRatio=True, mask="auto")
     page.showPage()
     page.save()
@@ -2027,6 +2105,10 @@ def _render_dataset_placeholder_page(document: TravelDocument, message: str) -> 
     text = page.beginText(2 * cm, height - 4 * cm)
     text.textLine(f"Dokumenttyp: {document.document_type}")
     text.textLine(f"Originaldatei: {document.original_name}")
+    if document.collection_label:
+        text.textLine(f"Sammelbegriff: {document.collection_label}")
+    if document.linked_invoice and document.document_type != "Rechnung":
+        text.textLine(f"Verknüpfte Rechnung: {document.linked_invoice.original_name}")
     text.textLine("")
     for wrapped in _wrap_text(message, 90):
         text.textLine(wrapped)

@@ -155,6 +155,7 @@ export function TravelManager() {
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
   const [expandedTrips, setExpandedTrips] = useState<number[]>([])
+  const [expandedCollections, setExpandedCollections] = useState<number[]>([])
   const [workflowUpdating, setWorkflowUpdating] = useState<number | null>(null)
   const [updatingDocId, setUpdatingDocId] = useState<number | null>(null)
   const [openDatasetMenuId, setOpenDatasetMenuId] = useState<number | null>(null)
@@ -324,6 +325,16 @@ export function TravelManager() {
       const data = await listTravels()
       setTrips(data)
       setExpandedTrips((prev) => prev.filter((id) => data.some((trip) => trip.id === id)))
+      const invoiceIds = data.flatMap((trip) =>
+        trip.documents
+          .filter((document) => document.document_type === 'Rechnung')
+          .map((document) => document.id),
+      )
+      setExpandedCollections((prev) => {
+        const preserved = prev.filter((id) => invoiceIds.includes(id))
+        const missing = invoiceIds.filter((id) => !preserved.includes(id))
+        return [...preserved, ...missing]
+      })
       setOpenDatasetMenuId(null)
       return data
     } catch (error) {
@@ -331,6 +342,7 @@ export function TravelManager() {
       setGlobalError('Dienstreisen konnten nicht geladen werden.')
       setTrips([])
       setExpandedTrips([])
+      setExpandedCollections([])
       return [] as TravelTrip[]
     } finally {
       setLoading(false)
@@ -493,6 +505,14 @@ export function TravelManager() {
     )
   }
 
+  const toggleCollection = useCallback((invoiceId: number) => {
+    setExpandedCollections((prev) =>
+      prev.includes(invoiceId)
+        ? prev.filter((id) => id !== invoiceId)
+        : [...prev, invoiceId],
+    )
+  }, [])
+
   const toggleDatasetMenu = useCallback((tripId: number) => {
     setOpenDatasetMenuId((prev) => (prev === tripId ? null : tripId))
   }, [])
@@ -641,6 +661,82 @@ export function TravelManager() {
     }
   }
 
+  const handleCollectionLabel = async (trip: TravelTrip, document: TravelDocument) => {
+    const next = window.prompt(
+      'Sammelbegriff festlegen (leer lassen, um zu entfernen)',
+      document.collection_label ?? '',
+    )
+    if (next === null) return
+    const trimmed = next.trim()
+    setGlobalError(null)
+    setUpdatingDocId(document.id)
+    try {
+      await updateTravelDocument(trip.id, document.id, {
+        collection_label: trimmed.length > 0 ? trimmed : null,
+      })
+      await loadTrips()
+    } catch (error) {
+      console.error('Sammelbegriff konnte nicht gespeichert werden', error)
+      setGlobalError('Sammelbegriff konnte nicht gespeichert werden.')
+    } finally {
+      setUpdatingDocId(null)
+    }
+  }
+
+  const handleLinkInvoice = async (trip: TravelTrip, document: TravelDocument) => {
+    const invoices = trip.documents.filter((item) => item.document_type === 'Rechnung')
+    if (invoices.length === 0) {
+      window.alert('Es sind keine Rechnungen vorhanden, die verknüpft werden können.')
+      return
+    }
+    const options = invoices
+      .map((invoice) => {
+        const label = invoice.collection_label ? `${invoice.collection_label} · ` : ''
+        return `${invoice.id}: ${label}${invoice.original_name}`
+      })
+      .join('\n')
+    const response = window.prompt(
+      `Rechnung auswählen (ID eingeben, leer lassen für keine Verknüpfung):\n${options}`,
+      document.linked_invoice_id ? String(document.linked_invoice_id) : '',
+    )
+    if (response === null) return
+    const choice = response.trim()
+    let invoiceId: number | null = null
+    if (choice !== '') {
+      const parsed = Number(choice)
+      if (!Number.isInteger(parsed) || !invoices.some((invoice) => invoice.id === parsed)) {
+        window.alert('Ungültige Auswahl. Bitte eine der angezeigten IDs verwenden.')
+        return
+      }
+      invoiceId = parsed
+    }
+    setGlobalError(null)
+    setUpdatingDocId(document.id)
+    try {
+      await updateTravelDocument(trip.id, document.id, { linked_invoice_id: invoiceId })
+      await loadTrips()
+    } catch (error) {
+      console.error('Verknüpfung konnte nicht gespeichert werden', error)
+      setGlobalError('Verknüpfung konnte nicht gespeichert werden.')
+    } finally {
+      setUpdatingDocId(null)
+    }
+  }
+
+  const handleUnlinkInvoice = async (trip: TravelTrip, document: TravelDocument) => {
+    setGlobalError(null)
+    setUpdatingDocId(document.id)
+    try {
+      await updateTravelDocument(trip.id, document.id, { linked_invoice_id: null })
+      await loadTrips()
+    } catch (error) {
+      console.error('Verknüpfung konnte nicht entfernt werden', error)
+      setGlobalError('Verknüpfung konnte nicht entfernt werden.')
+    } finally {
+      setUpdatingDocId(null)
+    }
+  }
+
   const handleToggleSigned = async (trip: TravelTrip, document: TravelDocument) => {
     const next = !document.signed
     setGlobalError(null)
@@ -656,6 +752,128 @@ export function TravelManager() {
     }
   }
 
+  const renderDocumentCard = (
+    trip: TravelTrip,
+    document: TravelDocument,
+    options: { nested?: boolean } = {},
+  ) => {
+    const isNested = options.nested ?? false
+    const isSignable = SIGNABLE_TYPES.has(document.document_type)
+    const isUpdating = updatingDocId === document.id
+    const linkedInfo =
+      document.linked_invoice && document.document_type !== 'Rechnung' && !isNested
+        ? `Rechnung: ${document.linked_invoice.original_name}`
+        : null
+
+    return (
+      <div
+        key={document.id}
+        className={clsx(
+          'rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3',
+          isNested && 'ml-4 border-slate-800/70 bg-slate-950/40',
+        )}
+      >
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-slate-500">
+              <span>{document.document_type}</span>
+              <span>·</span>
+              <span>{dayjs(document.created_at).format('DD.MM.YYYY HH:mm')}</span>
+              {document.collection_label && (
+                <span className="rounded bg-primary/15 px-2 py-0.5 text-[10px] text-primary">
+                  {document.collection_label}
+                </span>
+              )}
+              {linkedInfo && (
+                <span className="rounded bg-slate-900/70 px-2 py-0.5 text-[10px] text-slate-200">
+                  {linkedInfo}
+                </span>
+              )}
+              {isSignable && (
+                <span className="rounded bg-slate-900/50 px-2 py-0.5 text-[10px] text-slate-200">
+                  {document.signed ? 'Unterschrieben' : 'Nicht unterschrieben'}
+                </span>
+              )}
+            </div>
+            <p className="text-sm font-medium text-slate-100">{document.original_name}</p>
+            <p className="text-xs text-slate-400">
+              {document.comment ? document.comment : 'Kein Kommentar hinterlegt.'}
+            </p>
+            {document.linked_invoice_id && !document.linked_invoice && (
+              <p className="text-xs text-amber-300">Zugeordnete Rechnung konnte nicht gefunden werden.</p>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href={travelDocumentDownloadUrl(trip.id, document.id)}
+              className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+            >
+              Download
+            </a>
+            <button
+              type="button"
+              onClick={() => handleDocumentComment(trip, document)}
+              className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+              disabled={isUpdating}
+            >
+              Kommentar bearbeiten
+            </button>
+            {document.document_type === 'Rechnung' && (
+              <button
+                type="button"
+                onClick={() => handleCollectionLabel(trip, document)}
+                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                disabled={isUpdating}
+              >
+                {document.collection_label ? 'Sammelbegriff ändern' : 'Sammelbegriff setzen'}
+              </button>
+            )}
+            {document.document_type === 'Beleg' && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => handleLinkInvoice(trip, document)}
+                  className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                  disabled={isUpdating}
+                >
+                  {document.linked_invoice_id ? 'Rechnung ändern' : 'Rechnung verknüpfen'}
+                </button>
+                {document.linked_invoice_id && (
+                  <button
+                    type="button"
+                    onClick={() => handleUnlinkInvoice(trip, document)}
+                    className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-300 hover:border-rose-400 hover:text-rose-200"
+                    disabled={isUpdating}
+                  >
+                    Verknüpfung lösen
+                  </button>
+                )}
+              </>
+            )}
+            {isSignable && (
+              <button
+                type="button"
+                onClick={() => handleToggleSigned(trip, document)}
+                className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
+                disabled={isUpdating}
+              >
+                {document.signed ? 'Signatur entfernen' : 'Als unterschrieben markieren'}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => handleDocumentDelete(trip, document)}
+              className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-300 hover:border-rose-400 hover:text-rose-200"
+              disabled={isUpdating}
+            >
+              Löschen
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   const renderTrip = (trip: TravelTrip) => {
     const isExpanded = expandedTrips.includes(trip.id)
     const statusIndex = Math.max(
@@ -666,6 +884,18 @@ export function TravelManager() {
     const previousStep = statusIndex > 0 ? WORKFLOW_STEPS[statusIndex - 1] : null
     const nextStep =
       statusIndex < WORKFLOW_STEPS.length - 1 ? WORKFLOW_STEPS[statusIndex + 1] : null
+
+    const receiptsByInvoice = new Map<number, TravelDocument[]>()
+    for (const document of trip.documents) {
+      if (document.document_type === 'Beleg' && document.linked_invoice_id) {
+        const existing = receiptsByInvoice.get(document.linked_invoice_id) ?? []
+        existing.push(document)
+        receiptsByInvoice.set(document.linked_invoice_id, existing)
+      }
+    }
+    receiptsByInvoice.forEach((documents) => {
+      documents.sort((a, b) => dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf())
+    })
 
     return (
       <li
@@ -854,67 +1084,66 @@ export function TravelManager() {
               {trip.documents.length === 0 ? (
                 <p className="mt-2 text-xs text-slate-500">Keine Dokumente vorhanden.</p>
               ) : (
-                <ul className="mt-3 space-y-3">
-                  {trip.documents.map((document) => (
-                    <li
-                      key={document.id}
-                      className="rounded-lg border border-slate-800 bg-slate-950/60 px-3 py-3"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase tracking-wide text-slate-500">
-                            <span>{document.document_type}</span>
-                            <span>·</span>
-                            <span>{dayjs(document.created_at).format('DD.MM.YYYY HH:mm')}</span>
-                            {SIGNABLE_TYPES.has(document.document_type) && (
-                              <span className="rounded bg-slate-900/50 px-2 py-0.5 text-[10px] text-slate-200">
-                                {document.signed ? 'Unterschrieben' : 'Nicht unterschrieben'}
-                              </span>
+                <div className="mt-3 space-y-3">
+                  {trip.documents
+                    .filter((document) => document.document_type !== 'Beleg' || !document.linked_invoice_id)
+                    .map((document) => {
+                      if (document.document_type === 'Rechnung') {
+                        const receipts = receiptsByInvoice.get(document.id) ?? []
+                        const hasReceipts = receipts.length > 0
+                        const isCollectionExpanded = expandedCollections.includes(document.id)
+                        return (
+                          <div key={`invoice-block-${document.id}`} className="space-y-2">
+                            {renderDocumentCard(trip, document)}
+                            {hasReceipts && (
+                              <div className="ml-1 rounded-lg border border-slate-800/60 bg-slate-950/40 p-2">
+                                <button
+                                  type="button"
+                                  onClick={() => toggleCollection(document.id)}
+                                  className="flex w-full items-center justify-between gap-2 text-xs font-medium text-slate-200"
+                                  aria-expanded={isCollectionExpanded}
+                                >
+                                  <span>
+                                    {document.collection_label
+                                      ? `${document.collection_label} (${receipts.length} ${
+                                          receipts.length === 1 ? 'Beleg' : 'Belege'
+                                        })`
+                                      : `Verknüpfte Belege (${receipts.length})`}
+                                  </span>
+                                  <svg
+                                    className={clsx(
+                                      'h-4 w-4 text-slate-400 transition-transform',
+                                      isCollectionExpanded && 'rotate-180',
+                                    )}
+                                    viewBox="0 0 20 20"
+                                    fill="none"
+                                    xmlns="http://www.w3.org/2000/svg"
+                                    aria-hidden="true"
+                                  >
+                                    <path
+                                      d="M5 8l5 5 5-5"
+                                      stroke="currentColor"
+                                      strokeWidth={1.5}
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                    />
+                                  </svg>
+                                </button>
+                                {isCollectionExpanded && (
+                                  <div className="mt-2 space-y-2">
+                                    {receipts.map((receipt) =>
+                                      renderDocumentCard(trip, receipt, { nested: true }),
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             )}
                           </div>
-                          <p className="text-sm font-medium text-slate-100">{document.original_name}</p>
-                          <p className="text-xs text-slate-400">
-                            {document.comment ? document.comment : 'Kein Kommentar hinterlegt.'}
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <a
-                            href={travelDocumentDownloadUrl(trip.id, document.id)}
-                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
-                          >
-                            Download
-                          </a>
-                          <button
-                            type="button"
-                            onClick={() => handleDocumentComment(trip, document)}
-                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
-                            disabled={updatingDocId === document.id}
-                          >
-                            Kommentar bearbeiten
-                          </button>
-                          {SIGNABLE_TYPES.has(document.document_type) && (
-                            <button
-                              type="button"
-                              onClick={() => handleToggleSigned(trip, document)}
-                              className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
-                              disabled={updatingDocId === document.id}
-                            >
-                              {document.signed ? 'Signatur entfernen' : 'Als unterschrieben markieren'}
-                            </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => handleDocumentDelete(trip, document)}
-                            className="rounded-md border border-rose-500/40 px-2 py-1 text-xs text-rose-300 hover:border-rose-400 hover:text-rose-200"
-                            disabled={updatingDocId === document.id}
-                          >
-                            Löschen
-                          </button>
-                        </div>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
+                        )
+                      }
+                      return renderDocumentCard(trip, document)
+                    })}
+                </div>
               )}
             </div>
           </div>

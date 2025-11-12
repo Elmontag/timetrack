@@ -288,6 +288,24 @@ class SubtrackCreateRequest(BaseModel):
     note: Optional[str] = None
 
 
+class TravelInvoiceReference(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    document_type: str
+    original_name: str
+    created_at: dt.datetime
+
+    @model_serializer(mode="plain", when_used="json")
+    def _serialize(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "document_type": self.document_type,
+            "original_name": self.original_name,
+            "created_at": _serialize_datetime(self.created_at),
+        }
+
+
 class TravelDocumentResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -297,6 +315,9 @@ class TravelDocumentResponse(BaseModel):
     original_name: str
     comment: Optional[str]
     signed: bool
+    collection_label: Optional[str] = None
+    linked_invoice_id: Optional[int] = None
+    linked_invoice: Optional[TravelInvoiceReference] = None
     created_at: dt.datetime
 
     @model_serializer(mode="plain", when_used="json")
@@ -308,6 +329,9 @@ class TravelDocumentResponse(BaseModel):
             "original_name": self.original_name,
             "comment": self.comment,
             "signed": self.signed,
+            "collection_label": self.collection_label,
+            "linked_invoice_id": self.linked_invoice_id,
+            "linked_invoice": self.linked_invoice._serialize() if self.linked_invoice else None,
             "created_at": _serialize_datetime(self.created_at),
             "download_path": f"/travels/{self.trip_id}/documents/{self.id}/download",
         }
@@ -382,6 +406,8 @@ class TravelTripUpdateRequest(BaseModel):
 class TravelDocumentUpdateRequest(BaseModel):
     comment: Optional[str] = None
     signed: Optional[bool] = None
+    collection_label: Optional[str] = None
+    linked_invoice_id: Optional[int] = None
 
 
 class TravelContact(BaseModel):

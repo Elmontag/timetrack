@@ -64,6 +64,13 @@ export interface CalendarEvent {
   attendees: string[]
 }
 
+export interface TravelInvoiceReference {
+  id: number
+  document_type: string
+  original_name: string
+  created_at: string
+}
+
 export interface TravelDocument {
   id: number
   trip_id: number
@@ -71,6 +78,9 @@ export interface TravelDocument {
   original_name: string
   comment: string | null
   signed: boolean
+  collection_label: string | null
+  linked_invoice_id: number | null
+  linked_invoice: TravelInvoiceReference | null
   created_at: string
   download_path: string
 }
@@ -399,14 +409,25 @@ export async function createTravelLetter(
   return response.data
 }
 
-export async function uploadTravelDocument(
-  tripId: number,
-  payload: { document_type: string; comment?: string | null; file: File },
-) {
+export interface UploadTravelDocumentPayload {
+  document_type: string
+  comment?: string | null
+  file: File
+  collection_label?: string | null
+  linked_invoice_id?: number | null
+}
+
+export async function uploadTravelDocument(tripId: number, payload: UploadTravelDocumentPayload) {
   const formData = new FormData()
   formData.append('document_type', payload.document_type)
   if (payload.comment) {
     formData.append('comment', payload.comment)
+  }
+  if (payload.collection_label) {
+    formData.append('collection_label', payload.collection_label)
+  }
+  if (typeof payload.linked_invoice_id === 'number') {
+    formData.append('linked_invoice_id', String(payload.linked_invoice_id))
   }
   formData.append('file', payload.file)
   const response = await client.post<TravelDocument>(`/travels/${tripId}/documents`, formData, {
@@ -418,7 +439,7 @@ export async function uploadTravelDocument(
 export async function updateTravelDocument(
   tripId: number,
   documentId: number,
-  payload: { comment?: string | null; signed?: boolean },
+  payload: { comment?: string | null; signed?: boolean; collection_label?: string | null; linked_invoice_id?: number | null },
 ) {
   const response = await client.patch<TravelDocument>(
     `/travels/${tripId}/documents/${documentId}`,

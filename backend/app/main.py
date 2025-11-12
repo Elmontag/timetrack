@@ -7,6 +7,7 @@ from typing import Optional
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 from . import models
@@ -86,7 +87,27 @@ from .services import (
 from .state import RuntimeState
 from .token_utils import consume_token, create_token, verify_token
 
+
+
+def _apply_sqlite_migrations() -> None:
+    inspector = inspect(engine)
+    columns = {column["name"] for column in inspector.get_columns("travel_documents")}
+    statements: list[str] = []
+    if "collection_label" not in columns:
+        statements.append("ALTER TABLE travel_documents ADD COLUMN collection_label VARCHAR(120)")
+    if "linked_invoice_id" not in columns:
+        statements.append("ALTER TABLE travel_documents ADD COLUMN linked_invoice_id INTEGER")
+        statements.append(
+            "CREATE INDEX IF NOT EXISTS ix_travel_documents_linked_invoice_id ON travel_documents (linked_invoice_id)"
+        )
+    if statements:
+        with engine.begin() as connection:
+            for statement in statements:
+                connection.execute(text(statement))
+
+
 models.Base.metadata.create_all(bind=engine)
+_apply_sqlite_migrations()
 
 runtime_state = RuntimeState(settings)
 with db_session() as session:
@@ -350,12 +371,23 @@ async def upload_travel_document(
     trip_id: int,
     document_type: str = Form(...),
     comment: Optional[str] = Form(None),
+    collection_label: Optional[str] = Form(None),
+    linked_invoice_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
 ) -> TravelDocumentResponse:
     content = await file.read()
     normalized_comment = comment.strip() if comment and comment.strip() else None
-    document = add_travel_document(db, trip_id, document_type, file.filename or "upload", content, normalized_comment)
+    document = add_travel_document(
+        db,
+        trip_id,
+        document_type,
+        file.filename or "upload",
+        content,
+        normalized_comment,
+        collection_label=collection_label,
+        linked_invoice_id=linked_invoice_id,
+    )
     return document
 
 
