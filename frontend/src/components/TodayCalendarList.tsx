@@ -22,6 +22,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
   const [participationUpdating, setParticipationUpdating] = useState<number | null>(null)
   const [selectedDay, setSelectedDay] = useState(day)
   const [isCollapsed, setIsCollapsed] = useState(false)
+  const [collapsedHover, setCollapsedHover] = useState(false)
 
   useEffect(() => {
     setSelectedDay(day)
@@ -56,7 +57,14 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
   useEffect(() => {
     setExpanded([])
     setError(null)
+    setCollapsedHover(false)
   }, [selectedDay])
+
+  useEffect(() => {
+    if (!isCollapsed) {
+      setCollapsedHover(false)
+    }
+  }, [isCollapsed])
 
   const changeDay = (offset: number) => {
     setSelectedDay((prev) => dayjs(prev).add(offset, 'day').format('YYYY-MM-DD'))
@@ -96,47 +104,17 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
     }
   }
 
-  if (isCollapsed) {
-    return (
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-4">
-        <div className="flex items-start justify-end gap-2">
-          <div className="group relative">
-            <span className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs font-medium text-slate-300">
-              {dayjs(selectedDay).format('dd, DD.MM.YYYY')}
-            </span>
-            <span className="pointer-events-none absolute right-1/2 top-full z-10 mt-1 w-max translate-x-1/2 rounded-lg bg-slate-950/90 px-3 py-1 text-xs font-semibold text-slate-100 opacity-0 shadow-lg transition-opacity duration-150 group-hover:opacity-100">
-              Heutige Termine
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={toggleCollapse}
-            aria-expanded={!isCollapsed}
-            aria-label="Termine anzeigen"
-            className="rounded-full border border-slate-700 bg-slate-950/70 p-1 text-slate-300 transition hover:border-primary hover:text-primary"
-          >
-            <svg
-              className="h-4 w-4"
-              viewBox="0 0 20 20"
-              fill="none"
-              xmlns="http://www.w3.org/2000/svg"
-            >
-              <path
-                d="M8 5l5 5-5 5"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              />
-            </svg>
-          </button>
-        </div>
-      </div>
-    )
-  }
+  const handleCollapsedEnter = () => setCollapsedHover(true)
+  const handleCollapsedLeave = () => setCollapsedHover(false)
 
-  return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+  const renderPanel = (compact: boolean) => (
+    <div
+      className={
+        compact
+          ? 'w-80 rounded-2xl border border-slate-800 bg-slate-900/90 p-5 shadow-2xl'
+          : 'rounded-2xl border border-slate-800 bg-slate-900/70 p-6'
+      }
+    >
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
           <h2 className="text-lg font-semibold text-slate-100">
@@ -194,7 +172,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
             type="button"
             onClick={toggleCollapse}
             aria-expanded={!isCollapsed}
-            aria-label="Termine verbergen"
+            aria-label={isCollapsed ? 'Termine anzeigen' : 'Termine verbergen'}
             className="rounded-full border border-slate-700 bg-slate-950/70 p-1 text-slate-300 transition hover:border-primary hover:text-primary"
           >
             <svg
@@ -204,7 +182,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
               xmlns="http://www.w3.org/2000/svg"
             >
               <path
-                d="M12 5l-5 5 5 5"
+                d={isCollapsed ? 'M5 8l5 5 5-5' : 'M5 12l5-5 5 5'}
                 stroke="currentColor"
                 strokeWidth="1.5"
                 strokeLinecap="round"
@@ -347,4 +325,49 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
       </div>
     </div>
   )
+
+  if (isCollapsed) {
+    return (
+      <div className="flex justify-end">
+        <div
+          className="relative"
+          onMouseEnter={handleCollapsedEnter}
+          onMouseLeave={handleCollapsedLeave}
+        >
+          <div className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1.5 text-xs font-medium text-slate-200 shadow-sm">
+            <span>{dayjs(selectedDay).format('dd, DD.MM.YYYY')}</span>
+            <button
+              type="button"
+              onClick={toggleCollapse}
+              aria-expanded={!isCollapsed}
+              aria-label="Termine anzeigen"
+              className="rounded-full border border-slate-700 bg-slate-900/80 p-1 text-slate-300 transition hover:border-primary hover:text-primary"
+            >
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 20 20"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M5 8l5 5 5-5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+          {collapsedHover && (
+            <div className="absolute right-0 top-full z-20 mt-3" role="dialog" aria-label="Heutige Termine Vorschau">
+              {renderPanel(true)}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return renderPanel(false)
 }
