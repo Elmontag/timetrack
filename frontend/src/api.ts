@@ -361,6 +361,7 @@ export async function createCalendarEvent(payload: {
   participated?: boolean
   status?: string
   attendees?: string[]
+  sync_to_caldav?: boolean
 }) {
   const response = await client.post<CalendarEvent>('/calendar/events', payload)
   return response.data
