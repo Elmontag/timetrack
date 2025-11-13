@@ -397,6 +397,7 @@ export function CalendarPanel({ refreshKey }: Props) {
 
   const openDeleteDialog = useCallback(
     (event: CalendarEvent) => {
+      setDayDetailsOpen(false)
       const seriesKey = event.external_id
         ? `${event.calendar_identifier ?? 'manual'}::${event.external_id}`
         : null
