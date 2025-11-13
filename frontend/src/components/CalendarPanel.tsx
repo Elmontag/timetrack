@@ -90,6 +90,7 @@ export function CalendarPanel({ refreshKey }: Props) {
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [expandedRows, setExpandedRows] = useState<number[]>([])
+  const [expandedDayEventIds, setExpandedDayEventIds] = useState<number[]>([])
   const [participationUpdating, setParticipationUpdating] = useState<number | null>(null)
   const seriesCounts = useMemo(() => {
     const map = new Map<string, number>()
@@ -169,6 +170,16 @@ export function CalendarPanel({ refreshKey }: Props) {
     () => `${dayjs(range.from).format('DD.MM.YYYY')} – ${dayjs(range.to).format('DD.MM.YYYY')}`,
     [range.from, range.to],
   )
+
+  useEffect(() => {
+    if (!dayDetailsOpen) {
+      setExpandedDayEventIds([])
+    }
+  }, [dayDetailsOpen])
+
+  useEffect(() => {
+    setExpandedDayEventIds([])
+  }, [selectedDay])
 
   useEffect(() => {
     const pivot = dayjs(pivotDate)
@@ -374,6 +385,12 @@ export function CalendarPanel({ refreshKey }: Props) {
 
   const toggleDetails = (eventId: number) => {
     setExpandedRows((prev) =>
+      prev.includes(eventId) ? prev.filter((id) => id !== eventId) : [...prev, eventId],
+    )
+  }
+
+  const toggleDayEventDetails = (eventId: number) => {
+    setExpandedDayEventIds((prev) =>
       prev.includes(eventId) ? prev.filter((id) => id !== eventId) : [...prev, eventId],
     )
   }
@@ -802,35 +819,58 @@ export function CalendarPanel({ refreshKey }: Props) {
           <p className="text-sm text-slate-400">Keine Termine an diesem Tag.</p>
         ) : (
           <ul className="space-y-3">
-            {selectedDayEvents.map((event) => (
-              <li
-                key={event.id}
-                className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-200"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <span className="font-semibold">{event.title}</span>
-                  <span
-                    className={clsx(
-                      'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
-                      STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
-                    )}
-                  >
-                    {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs text-slate-400">
-                  {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
-                </p>
-                <p className="text-[11px] text-slate-500">
-                  {event.calendar_identifier && event.calendar_identifier !== 'manual'
-                    ? `CalDAV: ${event.calendar_identifier}`
-                    : 'Lokal'}
-                </p>
-                {event.location && <p className="text-xs text-slate-400">Ort: {event.location}</p>}
-                {event.description && <p className="mt-1 text-xs text-slate-400">{event.description}</p>}
-                <div className="mt-2">{renderStatusActions(event)}</div>
-              </li>
-            ))}
+            {selectedDayEvents.map((event) => {
+              const isExpanded = expandedDayEventIds.includes(event.id)
+              return (
+                <li
+                  key={event.id}
+                  className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-200"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-slate-100">{event.title}</p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                          ? `CalDAV: ${event.calendar_identifier}`
+                          : 'Lokal'}
+                      </p>
+                      {event.location && <p className="text-xs text-slate-400">Ort: {event.location}</p>}
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <span
+                        className={clsx(
+                          'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+                          STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
+                        )}
+                      >
+                        {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleDayEventDetails(event.id)}
+                        className="rounded-md border border-slate-800 px-2 py-1 text-[11px] text-slate-300 hover:border-primary hover:text-primary"
+                        aria-expanded={isExpanded}
+                      >
+                        {isExpanded ? 'Weniger' : 'Details'}
+                      </button>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div className="mt-3 space-y-2 border-t border-slate-800 pt-3">
+                      {event.description ? (
+                        <p className="whitespace-pre-wrap text-xs text-slate-300">{event.description}</p>
+                      ) : (
+                        <p className="text-xs italic text-slate-500">Keine Beschreibung vorhanden.</p>
+                      )}
+                    </div>
+                  )}
+                  <div className="mt-3">{renderStatusActions(event)}</div>
+                </li>
+              )
+            })}
           </ul>
         )}
       </Lightbox>
