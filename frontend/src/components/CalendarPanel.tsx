@@ -522,6 +522,42 @@ export function CalendarPanel({ refreshKey }: Props) {
           <p className="mt-1 text-xs text-slate-500">Zeitraum: {formattedRange}</p>
         </div>
         <div className="flex flex-wrap items-center gap-3">
+          <div className="inline-flex overflow-hidden rounded-md border border-slate-800">
+            {LAYOUT_OPTIONS.map((option) => (
+              <button
+                key={option.key}
+                type="button"
+                onClick={() => setLayoutMode(option.key)}
+                className={clsx(
+                  'px-3 py-1 text-xs font-medium transition-colors',
+                  layoutMode === option.key
+                    ? 'bg-primary text-slate-950'
+                    : 'bg-slate-950/60 text-slate-300 hover:bg-slate-800',
+                )}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {layoutMode === 'list' && (
+            <div className="inline-flex overflow-hidden rounded-md border border-slate-800">
+              {VIEW_OPTIONS.map((option) => (
+                <button
+                  key={option.key}
+                  type="button"
+                  onClick={() => setViewMode(option.key)}
+                  className={clsx(
+                    'px-3 py-1 text-xs font-medium transition-colors',
+                    viewMode === option.key
+                      ? 'bg-primary text-slate-950'
+                      : 'bg-slate-950/60 text-slate-300 hover:bg-slate-800',
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          )}
           <div className="flex items-center gap-2">
             <button
               type="button"
@@ -839,251 +875,200 @@ export function CalendarPanel({ refreshKey }: Props) {
         )}
       </Lightbox>
 
-      <div className="mt-6 flex flex-col gap-6 lg:flex-row">
-        <nav className="w-full rounded-xl border border-slate-800 bg-slate-950/40 p-4 text-sm text-slate-300 lg:w-64">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">Kalendermenü</p>
-          <div className="mt-4 space-y-2">
-            {LAYOUT_OPTIONS.map((option) => {
-              const isActive = layoutMode === option.key
-              return (
-                <button
-                  key={option.key}
-                  type="button"
-                  onClick={() => setLayoutMode(option.key)}
-                  className={clsx(
-                    'w-full rounded-md border px-3 py-2 text-left text-sm transition focus:outline-none focus:ring-2 focus:ring-primary/40',
-                    isActive
-                      ? 'border-primary/60 bg-primary text-slate-950 shadow'
-                      : 'border-transparent bg-slate-950/20 text-slate-300 hover:border-slate-700 hover:bg-slate-900/60',
-                  )}
-                  aria-current={isActive ? 'page' : undefined}
-                >
-                  {option.label}
-                </button>
-              )
-            })}
-          </div>
-        </nav>
-        <div className="flex-1 space-y-4">
-          {error && !loading && (
-            <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">{error}</p>
-          )}
-          {loading ? (
-            <p className="text-sm text-slate-400">Lade Termine…</p>
-          ) : (
-            <>
-              {layoutMode === 'list' && (
-                <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="inline-flex overflow-hidden rounded-md border border-slate-800">
-                    {VIEW_OPTIONS.map((option) => (
-                      <button
-                        key={option.key}
-                        type="button"
-                        onClick={() => setViewMode(option.key)}
-                        className={clsx(
-                          'px-3 py-1 text-xs font-medium transition-colors',
-                          viewMode === option.key
-                            ? 'bg-primary text-slate-950'
-                            : 'bg-slate-950/60 text-slate-300 hover:bg-slate-800',
-                        )}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-              {layoutMode === 'list' ? (
-                <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-800">
-                  <table className="min-w-full divide-y divide-slate-800 text-sm">
-                    <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-400">
-                      <tr>
-                        <th className="px-4 py-2 text-left">Termin</th>
-                        <th className="px-4 py-2 text-left">Zeitraum</th>
-                        <th className="px-4 py-2 text-left">Status</th>
-                        <th className="px-4 py-2 text-left">Details</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-800">
-                      {events.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-4 py-3 text-center text-sm text-slate-400">
-                            Keine Termine im Zeitraum.
+      <div className="mt-6 space-y-4">
+        {error && !loading && (
+          <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">{error}</p>
+        )}
+        {loading ? (
+          <p className="text-sm text-slate-400">Lade Termine…</p>
+        ) : layoutMode === 'list' ? (
+          <div className="max-h-80 overflow-y-auto rounded-xl border border-slate-800">
+            <table className="min-w-full divide-y divide-slate-800 text-sm">
+              <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-400">
+                <tr>
+                  <th className="px-4 py-2 text-left">Termin</th>
+                  <th className="px-4 py-2 text-left">Zeitraum</th>
+                  <th className="px-4 py-2 text-left">Status</th>
+                  <th className="px-4 py-2 text-left">Details</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800">
+                {events.length === 0 ? (
+                  <tr>
+                    <td colSpan={4} className="px-4 py-3 text-center text-sm text-slate-400">
+                      Keine Termine im Zeitraum.
+                    </td>
+                  </tr>
+                ) : (
+                  events.map((event) => {
+                    const isExpanded = expandedRows.includes(event.id)
+                    return (
+                      <Fragment key={event.id}>
+                        <tr className="hover:bg-slate-900/70">
+                          <td className="px-4 py-2 text-slate-100">
+                            <div className="font-medium">{event.title}</div>
+                          </td>
+                          <td className="px-4 py-2 text-slate-200">
+                            {dayjs(event.start_time).format('DD.MM.YYYY HH:mm')} –{' '}
+                            {dayjs(event.end_time).format('DD.MM.YYYY HH:mm')}
+                          </td>
+                          <td className="px-4 py-2">
+                            <div className="flex flex-col gap-2">
+                              <span
+                                className={clsx(
+                                  'inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-medium',
+                                  STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
+                                )}
+                              >
+                                {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
+                              </span>
+                              {renderStatusActions(event)}
+                            </div>
+                          </td>
+                          <td className="px-4 py-2 text-slate-300">
+                            <button
+                              type="button"
+                              onClick={() => toggleDetails(event.id)}
+                              className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-primary hover:text-primary"
+                              aria-expanded={isExpanded}
+                            >
+                              {isExpanded ? 'Weniger' : 'Details'}
+                            </button>
                           </td>
                         </tr>
-                      ) : (
-                        events.map((event) => {
-                          const isExpanded = expandedRows.includes(event.id)
-                          return (
-                            <Fragment key={event.id}>
-                              <tr className="hover:bg-slate-900/70">
-                                <td className="px-4 py-2 text-slate-100">
-                                  <div className="font-medium">{event.title}</div>
-                                </td>
-                                <td className="px-4 py-2 text-slate-200">
-                                  {dayjs(event.start_time).format('DD.MM.YYYY HH:mm')} –{' '}
-                                  {dayjs(event.end_time).format('DD.MM.YYYY HH:mm')}
-                                </td>
-                                <td className="px-4 py-2">
-                                  <div className="flex flex-col gap-2">
-                                    <span
-                                      className={clsx(
-                                        'inline-flex w-fit items-center rounded-full px-2 py-0.5 text-xs font-medium',
-                                        STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
-                                      )}
-                                    >
-                                      {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
-                                    </span>
-                                    {renderStatusActions(event)}
+                        {isExpanded && (
+                          <tr className="bg-slate-950/40">
+                            <td colSpan={4} className="px-4 py-3 text-sm text-slate-200">
+                              <div className="space-y-3">
+                                {event.description ? (
+                                  <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-500">Beschreibung</p>
+                                    <p className="mt-1 whitespace-pre-wrap text-slate-300">{event.description}</p>
                                   </div>
-                                </td>
-                                <td className="px-4 py-2 text-slate-300">
-                                  <button
-                                    type="button"
-                                    onClick={() => toggleDetails(event.id)}
-                                    className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-primary hover:text-primary"
-                                    aria-expanded={isExpanded}
-                                  >
-                                    {isExpanded ? 'Weniger' : 'Details'}
-                                  </button>
-                                </td>
-                              </tr>
-                              {isExpanded && (
-                                <tr className="bg-slate-950/40">
-                                  <td colSpan={4} className="px-4 py-3 text-sm text-slate-200">
-                                    <div className="space-y-3">
-                                      {event.description ? (
-                                        <div>
-                                          <p className="text-xs uppercase tracking-wide text-slate-500">Beschreibung</p>
-                                          <p className="mt-1 whitespace-pre-wrap text-slate-300">{event.description}</p>
-                                        </div>
-                                      ) : null}
-                                      {event.location ? (
-                                        <p className="text-xs text-slate-400">Ort: {event.location}</p>
-                                      ) : null}
-                                      {event.attendees.length > 0 && (
-                                        <div>
-                                          <p className="text-xs uppercase tracking-wide text-slate-500">Teilnehmer</p>
-                                          <ul className="mt-1 list-disc space-y-1 pl-5 text-slate-300">
-                                            {event.attendees.map((attendee) => (
-                                              <li key={attendee}>{attendee}</li>
-                                            ))}
-                                          </ul>
-                                        </div>
-                                      )}
-                                      <div>
-                                        <p className="text-xs uppercase tracking-wide text-slate-500">Quelle</p>
-                                        <p className="text-slate-300">
-                                          {event.calendar_identifier && event.calendar_identifier !== 'manual'
-                                            ? `CalDAV (${event.calendar_identifier})`
-                                            : 'Lokal'}
-                                        </p>
-                                      </div>
-                                      {!event.description && !event.location && event.attendees.length === 0 && (
-                                        <p className="text-xs text-slate-500">Keine zusätzlichen Details vorhanden.</p>
-                                      )}
-                                    </div>
-                                  </td>
-                                </tr>
-                              )}
-                            </Fragment>
-                          )
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              ) : layoutMode === 'week' ? (
-                <div className="overflow-x-auto rounded-xl border border-slate-800">
-                  <table className="min-w-full divide-y divide-slate-800 text-sm">
-                    <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-400">
-                      <tr>
-                        {weekDays.map((day) => (
-                          <th key={day.format('YYYY-MM-DD')} className="px-4 py-2 text-left">
-                            {day.format('ddd, DD.MM.')}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      <tr>
-                        {weekDays.map((day) => {
-                          const dayKey = day.format('YYYY-MM-DD')
-                          const dayEvents = eventsByDate.get(dayKey) ?? []
-                          return (
-                            <td key={dayKey} className="align-top px-4 py-3">
-                              {dayEvents.length === 0 ? (
-                                <p className="text-xs text-slate-500">Keine Termine</p>
-                              ) : (
-                                <div className="space-y-3">
-                                  {dayEvents.map((event) => (
-                                    <div key={event.id} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
-                                      <p className="text-sm font-semibold text-slate-100">{event.title}</p>
-                                      <p className="text-xs text-slate-400">
-                                        {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
-                                      </p>
-                                      <span
-                                        className={clsx(
-                                          'mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
-                                          STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
-                                        )}
-                                      >
-                                        {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
-                                      </span>
-                                      <p className="mt-1 text-[11px] text-slate-500">
-                                        {event.calendar_identifier && event.calendar_identifier !== 'manual'
-                                          ? `CalDAV: ${event.calendar_identifier}`
-                                          : 'Lokal'}
-                                      </p>
-                                      {event.location && (
-                                        <p className="mt-1 text-xs text-slate-400">Ort: {event.location}</p>
-                                      )}
-                                      <div className="mt-2">{renderStatusActions(event)}</div>
-                                    </div>
-                                  ))}
+                                ) : null}
+                                {event.location ? (
+                                  <p className="text-xs text-slate-400">Ort: {event.location}</p>
+                                ) : null}
+                                {event.attendees.length > 0 && (
+                                  <div>
+                                    <p className="text-xs uppercase tracking-wide text-slate-500">Teilnehmer</p>
+                                    <ul className="mt-1 list-disc space-y-1 pl-5 text-slate-300">
+                                      {event.attendees.map((attendee) => (
+                                        <li key={attendee}>{attendee}</li>
+                                      ))}
+                                    </ul>
+                                  </div>
+                                )}
+                                <div>
+                                  <p className="text-xs uppercase tracking-wide text-slate-500">Quelle</p>
+                                  <p className="text-slate-300">
+                                    {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                                      ? `CalDAV (${event.calendar_identifier})`
+                                      : 'Lokal'}
+                                  </p>
                                 </div>
-                              )}
+                                {!event.description && !event.location && event.attendees.length === 0 && (
+                                  <p className="text-xs text-slate-500">Keine zusätzlichen Details vorhanden.</p>
+                                )}
+                              </div>
                             </td>
-                          )
-                        })}
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="grid grid-cols-7 gap-2 rounded-xl border border-slate-800 bg-slate-950/40 p-3">
-                    {monthDays.map((day) => {
-                      const dayKey = day.format('YYYY-MM-DD')
-                      const isCurrentMonth = pivotMonth.isValid() && day.isSame(pivotMonth, 'month')
-                      const isSelected = dayKey === selectedDay
-                      const hasEvents = (eventsByDate.get(dayKey) ?? []).length > 0
-                      return (
-                        <button
-                          key={dayKey}
-                          type="button"
-                          onClick={() => openDayDetails(dayKey)}
-                          className={clsx(
-                            'rounded-lg border px-2 py-2 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/40',
-                            isCurrentMonth
-                              ? 'border-slate-800 bg-slate-950/60 text-slate-100'
-                              : 'border-slate-900 bg-slate-950/30 text-slate-500',
-                            isSelected && 'border-primary text-primary shadow',
-                            dayKey === todayKey && 'ring-1 ring-primary/40',
-                          )}
-                        >
-                          <span className="text-sm font-semibold">{day.date()}</span>
-                          <span className="block text-[11px] text-slate-500">{day.format('dd')}</span>
-                          {hasEvents && <span className="mt-2 inline-block h-1.5 w-1.5 rounded-full bg-primary" />}
-                        </button>
-                      )
-                    })}
-                  </div>
-                </div>
-              )}
-            </>
-          )}
-        </div>
+                          </tr>
+                        )}
+                      </Fragment>
+                    )
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        ) : layoutMode === 'week' ? (
+          <div className="overflow-x-auto rounded-xl border border-slate-800">
+            <table className="min-w-full divide-y divide-slate-800 text-sm">
+              <thead className="bg-slate-900/80 text-xs uppercase tracking-wide text-slate-400">
+                <tr>
+                  {weekDays.map((day) => (
+                    <th key={day.format('YYYY-MM-DD')} className="px-4 py-2 text-left">
+                      {day.format('ddd, DD.MM.')}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  {weekDays.map((day) => {
+                    const dayKey = day.format('YYYY-MM-DD')
+                    const dayEvents = eventsByDate.get(dayKey) ?? []
+                    return (
+                      <td key={dayKey} className="align-top px-4 py-3">
+                        {dayEvents.length === 0 ? (
+                          <p className="text-xs text-slate-500">Keine Termine</p>
+                        ) : (
+                          <div className="space-y-3">
+                            {dayEvents.map((event) => (
+                              <div key={event.id} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                                <p className="text-sm font-semibold text-slate-100">{event.title}</p>
+                                <p className="text-xs text-slate-400">
+                                  {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
+                                </p>
+                                <span
+                                  className={clsx(
+                                    'mt-2 inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+                                    STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
+                                  )}
+                                >
+                                  {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
+                                </span>
+                                <p className="mt-1 text-[11px] text-slate-500">
+                                  {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                                    ? `CalDAV: ${event.calendar_identifier}`
+                                    : 'Lokal'}
+                                </p>
+                                {event.location && (
+                                  <p className="mt-1 text-xs text-slate-400">Ort: {event.location}</p>
+                                )}
+                                <div className="mt-2">{renderStatusActions(event)}</div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    )
+                  })}
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div className="grid grid-cols-7 gap-2 rounded-xl border border-slate-800 bg-slate-950/40 p-3">
+              {monthDays.map((day) => {
+                const dayKey = day.format('YYYY-MM-DD')
+                const isCurrentMonth = pivotMonth.isValid() && day.isSame(pivotMonth, 'month')
+                const isSelected = dayKey === selectedDay
+                const hasEvents = (eventsByDate.get(dayKey) ?? []).length > 0
+                return (
+                  <button
+                    key={dayKey}
+                    type="button"
+                    onClick={() => openDayDetails(dayKey)}
+                    className={clsx(
+                      'rounded-lg border px-2 py-2 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/40',
+                      isCurrentMonth
+                        ? 'border-slate-800 bg-slate-950/60 text-slate-100'
+                        : 'border-slate-900 bg-slate-950/30 text-slate-500',
+                      isSelected && 'border-primary text-primary shadow',
+                      dayKey === todayKey && 'ring-1 ring-primary/40',
+                    )}
+                  >
+                    <span className="text-sm font-semibold">{day.date()}</span>
+                    <span className="block text-[11px] text-slate-500">{day.format('dd')}</span>
+                    {hasEvents && <span className="mt-2 inline-block h-1.5 w-1.5 rounded-full bg-primary" />}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )
