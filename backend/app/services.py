@@ -1441,50 +1441,6 @@ def create_calendar_event(
     return event
 
 
-def _annotate_series_counts(db: Session, events: List[CalendarEvent]) -> None:
-    if not events:
-        return
-
-    identifiers: Set[Tuple[Optional[str], str]] = set()
-    for event in events:
-        setattr(event, "series_event_count", 0)
-        if event.external_id:
-            identifiers.add((event.calendar_identifier, event.external_id))
-
-    if not identifiers:
-        return
-
-    clauses = [
-        and_(
-            CalendarEvent.external_id == external_id,
-            CalendarEvent.calendar_identifier == calendar_identifier
-            if calendar_identifier is not None
-            else CalendarEvent.calendar_identifier.is_(None),
-        )
-        for calendar_identifier, external_id in identifiers
-    ]
-
-    filter_clause = clauses[0] if len(clauses) == 1 else or_(*clauses)
-
-    counts: Dict[Tuple[Optional[str], str], int] = {}
-    for calendar_identifier, external_id, total in (
-        db.query(
-            CalendarEvent.calendar_identifier,
-            CalendarEvent.external_id,
-            func.count(CalendarEvent.id),
-        )
-        .filter(filter_clause)
-        .group_by(CalendarEvent.calendar_identifier, CalendarEvent.external_id)
-    ):
-        counts[(calendar_identifier, external_id)] = int(total or 0)
-
-    for event in events:
-        if not event.external_id:
-            continue
-        key = (event.calendar_identifier, event.external_id)
-        event.series_event_count = counts.get(key, 1)
-
-
 def list_calendar_events(
     db: Session,
     state: RuntimeState,
@@ -1499,24 +1455,37 @@ def list_calendar_events(
     if end_date:
         _, end = _day_bounds(end_date)
         query = query.filter(CalendarEvent.start_time <= end)
-    events = query.order_by(CalendarEvent.start_time.asc()).all()
-    _annotate_series_counts(db, events)
-    return events
+    return query.order_by(CalendarEvent.start_time.asc()).all()
 
 
-def _apply_calendar_status_change(
+def set_calendar_participation(
     db: Session,
-    event: CalendarEvent,
-    target_status: str,
-    target_participated: bool,
-    target_ignored: bool,
-) -> bool:
+    state: RuntimeState,
+    event_id: int,
+    participated: Optional[bool] = None,
+    status_value: Optional[str] = None,
+    ignored: Optional[bool] = None,
+) -> CalendarEvent:
+    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).one_or_none()
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Calendar event not found")
+    target_status = status_value
+    if participated is not None:
+        target_status = "attended" if participated else (status_value or "absent")
+    if target_status is None:
+        target_status = event.status or "pending"
+    if target_status not in CALENDAR_EVENT_STATUSES:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unbekannter Kalenderstatus")
+
+    target_participated = target_status == "attended"
+    target_ignored = ignored if ignored is not None else target_status == "cancelled"
+
     if (
         event.status == target_status
         and event.participated == target_participated
         and event.ignored == target_ignored
     ):
-        return False
+        return event
 
     event.status = target_status
     event.participated = target_participated
@@ -1549,64 +1518,6 @@ def _apply_calendar_status_change(
             db.delete(subtrack)
 
     db.add(event)
-    return True
-
-
-def set_calendar_participation(
-    db: Session,
-    state: RuntimeState,
-    event_id: int,
-    participated: Optional[bool] = None,
-    status_value: Optional[str] = None,
-    ignored: Optional[bool] = None,
-    scope: Literal["single", "series"] | None = "single",
-) -> CalendarEvent:
-    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).one_or_none()
-    if not event:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Calendar event not found")
-
-    target_status = status_value
-    if participated is not None:
-        target_status = "attended" if participated else (status_value or "absent")
-    if target_status is None:
-        target_status = event.status or "pending"
-    if target_status not in CALENDAR_EVENT_STATUSES:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unbekannter Kalenderstatus")
-
-    target_participated = target_status == "attended"
-    target_ignored = ignored if ignored is not None else target_status == "cancelled"
-
-    scope_value = scope or "single"
-    if scope_value not in ("single", "series"):
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Ungültiger Änderungsumfang")
-
-    events_to_update: List[CalendarEvent] = [event]
-    if scope_value == "series":
-        if not event.external_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Termin gehört zu keiner Serie",
-            )
-        series_query = db.query(CalendarEvent).filter(CalendarEvent.external_id == event.external_id)
-        if event.calendar_identifier is None:
-            series_query = series_query.filter(CalendarEvent.calendar_identifier.is_(None))
-        else:
-            series_query = series_query.filter(CalendarEvent.calendar_identifier == event.calendar_identifier)
-        events_to_update = series_query.all() or [event]
-
-    changed = False
-    for target in events_to_update:
-        changed |= _apply_calendar_status_change(
-            db,
-            target,
-            target_status,
-            target_participated,
-            target_ignored,
-        )
-
-    if not changed:
-        return event
-
     db.commit()
     db.refresh(event)
     return event

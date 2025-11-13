@@ -2,7 +2,6 @@ import dayjs from 'dayjs'
 import isoWeek from 'dayjs/plugin/isoWeek'
 import { FormEvent, Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { CalendarEvent, createCalendarEvent, listCalendarEvents, updateCalendarEvent } from '../api'
-import { SeriesScopeDialog } from './SeriesScopeDialog'
 
 dayjs.extend(isoWeek)
 
@@ -54,7 +53,6 @@ export function CalendarPanel({ refreshKey }: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [expandedRows, setExpandedRows] = useState<number[]>([])
   const [participationUpdating, setParticipationUpdating] = useState<number | null>(null)
-  const [seriesDialogEvent, setSeriesDialogEvent] = useState<CalendarEvent | null>(null)
   const formattedRange = useMemo(
     () => `${dayjs(range.from).format('DD.MM.YYYY')} – ${dayjs(range.to).format('DD.MM.YYYY')}`,
     [range.from, range.to],
@@ -171,12 +169,11 @@ export function CalendarPanel({ refreshKey }: Props) {
   const updateStatus = async (
     eventId: number,
     status: 'pending' | 'attended' | 'absent' | 'cancelled',
-    scope: 'single' | 'series' = 'single',
   ) => {
     setParticipationUpdating(eventId)
     setError(null)
     try {
-      await updateCalendarEvent(eventId, { status, scope })
+      await updateCalendarEvent(eventId, { status })
       await loadEvents()
     } catch (err) {
       console.error('Kalenderstatus konnte nicht gespeichert werden', err)
@@ -186,27 +183,6 @@ export function CalendarPanel({ refreshKey }: Props) {
     }
   }
 
-  const requestCancellationScope = (event: CalendarEvent) => {
-    if (event.series_event_count > 1) {
-      setSeriesDialogEvent(event)
-      return
-    }
-    void updateStatus(event.id, 'cancelled')
-  }
-
-  const handleSeriesScopeSelection = async (scope: 'single' | 'series') => {
-    if (!seriesDialogEvent) {
-      return
-    }
-    try {
-      await updateStatus(seriesDialogEvent.id, 'cancelled', scope)
-    } finally {
-      setSeriesDialogEvent(null)
-    }
-  }
-
-  const closeSeriesDialog = () => setSeriesDialogEvent(null)
-
   const toggleDetails = (eventId: number) => {
     setExpandedRows((prev) =>
       prev.includes(eventId) ? prev.filter((id) => id !== eventId) : [...prev, eventId],
@@ -214,8 +190,7 @@ export function CalendarPanel({ refreshKey }: Props) {
   }
 
   return (
-    <>
-      <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="text-lg font-semibold text-slate-100">Kalenderübersicht</h2>
@@ -413,7 +388,7 @@ export function CalendarPanel({ refreshKey }: Props) {
                             </button>
                             <button
                               type="button"
-                              onClick={() => requestCancellationScope(event)}
+                              onClick={() => updateStatus(event.id, 'cancelled')}
                               disabled={participationUpdating === event.id}
                               className={`rounded-md border px-2 py-1 text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
                                 event.status === 'cancelled'
@@ -492,13 +467,6 @@ export function CalendarPanel({ refreshKey }: Props) {
           </tbody>
         </table>
       </div>
-      </div>
-      <SeriesScopeDialog
-        open={!!seriesDialogEvent}
-        eventTitle={seriesDialogEvent?.title ?? ''}
-        onSelect={handleSeriesScopeSelection}
-        onCancel={closeSeriesDialog}
-      />
-    </>
+    </div>
   )
 }
