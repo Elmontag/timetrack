@@ -452,6 +452,81 @@ def test_calendar_event_participation(client: TestClient):
     assert sessions == []
 
 
+def test_calendar_series_cancellation_scope(client: TestClient, session: Session):
+    first_resp = client.post(
+        "/calendar/events",
+        json={
+            "title": "Sprintplanung",
+            "start_time": "2024-03-01T09:00:00",
+            "end_time": "2024-03-01T10:00:00",
+        },
+    )
+    second_resp = client.post(
+        "/calendar/events",
+        json={
+            "title": "Sprintplanung",
+            "start_time": "2024-03-08T09:00:00",
+            "end_time": "2024-03-08T10:00:00",
+        },
+    )
+    assert first_resp.status_code == 201
+    assert second_resp.status_code == 201
+    first_id = first_resp.json()["id"]
+    second_id = second_resp.json()["id"]
+
+    series_uid = "UID-SERIES-123"
+    for event_id in (first_id, second_id):
+        event = session.get(models.CalendarEvent, event_id)
+        assert event is not None
+        event.external_id = series_uid
+        session.add(event)
+    session.commit()
+
+    initial_list = client.get(
+        "/calendar/events",
+        params={"from_date": "2024-03-01", "to_date": "2024-03-31"},
+    )
+    assert initial_list.status_code == 200
+    initial_map = {event["id"]: event for event in initial_list.json() if event["id"] in {first_id, second_id}}
+    assert initial_map[first_id]["series_event_count"] == 2
+    assert initial_map[second_id]["series_event_count"] == 2
+
+    patch_resp = client.patch(
+        f"/calendar/events/{first_id}",
+        json={"status": "cancelled", "scope": "series"},
+    )
+    assert patch_resp.status_code == 200
+
+    refreshed = (
+        session.query(models.CalendarEvent)
+        .filter(models.CalendarEvent.id.in_([first_id, second_id]))
+        .order_by(models.CalendarEvent.id.asc())
+        .all()
+    )
+    assert all(item.status == "cancelled" for item in refreshed)
+    assert all(item.ignored for item in refreshed)
+
+
+def test_series_scope_requires_identifier(client: TestClient):
+    create_resp = client.post(
+        "/calendar/events",
+        json={
+            "title": "Jour Fixe",
+            "start_time": "2024-04-01T13:00:00",
+            "end_time": "2024-04-01T14:00:00",
+        },
+    )
+    assert create_resp.status_code == 201
+    event_id = create_resp.json()["id"]
+
+    patch_resp = client.patch(
+        f"/calendar/events/{event_id}",
+        json={"status": "cancelled", "scope": "series"},
+    )
+    assert patch_resp.status_code == 400
+    assert "Serie" in patch_resp.json()["detail"]
+
+
 def test_calendar_events_trigger_caldav_sync(monkeypatch, client: TestClient):
     called: dict[str, tuple[Optional[str], Optional[str]]] = {}
 

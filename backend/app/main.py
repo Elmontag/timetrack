@@ -431,6 +431,7 @@ def update_calendar_event(
         participated=payload.participated,
         status_value=payload.status,
         ignored=payload.ignored,
+        scope=payload.scope,
     )
     return event
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from typing_extensions import Literal
 
@@ -237,6 +237,10 @@ class CalendarEventResponse(BaseModel):
     status: str
     ignored: bool
     attendees: list[str]
+    calendar_identifier: Optional[str]
+    external_id: Optional[str]
+    recurrence_id: Optional[str]
+    series_event_count: int = 0
 
     @model_serializer(mode="plain", when_used="json")
     def _serialize(self) -> dict[str, Any]:
@@ -251,6 +255,10 @@ class CalendarEventResponse(BaseModel):
             "status": self.status,
             "ignored": self.ignored,
             "attendees": list(self.attendees or []),
+            "calendar_identifier": self.calendar_identifier,
+            "external_id": self.external_id,
+            "recurrence_id": self.recurrence_id,
+            "series_event_count": getattr(self, "series_event_count", 0),
         }
 
 
@@ -274,6 +282,7 @@ class CalendarEventUpdateRequest(BaseModel):
     participated: Optional[bool] = None
     status: Optional[str] = None
     ignored: Optional[bool] = None
+    scope: Literal["single", "series"] = "single"
 
 
 class SubtrackResponse(BaseModel):

@@ -71,6 +71,10 @@ export interface CalendarEvent {
   status: string
   ignored: boolean
   attendees: string[]
+  calendar_identifier: string | null
+  external_id: string | null
+  recurrence_id: string | null
+  series_event_count: number
 }
 
 export interface TravelInvoiceReference {
@@ -368,7 +372,12 @@ export async function createCalendarEvent(payload: {
 
 export async function updateCalendarEvent(
   eventId: number,
-  payload: { participated?: boolean; status?: string; ignored?: boolean },
+  payload: {
+    participated?: boolean
+    status?: string
+    ignored?: boolean
+    scope?: 'single' | 'series'
+  },
 ) {
   const response = await client.patch<CalendarEvent>(`/calendar/events/${eventId}`, payload)
   return response.data

@@ -1,6 +1,7 @@
 import dayjs from 'dayjs'
 import { useCallback, useEffect, useState } from 'react'
 import { CalendarEvent, listCalendarEvents, updateCalendarEvent } from '../api'
+import { SeriesScopeDialog } from './SeriesScopeDialog'
 
 interface Props {
   day: string
@@ -20,6 +21,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<number[]>([])
   const [participationUpdating, setParticipationUpdating] = useState<number | null>(null)
+  const [seriesDialogEvent, setSeriesDialogEvent] = useState<CalendarEvent | null>(null)
 
   const loadEvents = useCallback(async () => {
     setLoading(true)
@@ -53,11 +55,12 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
   const handleStatusChange = async (
     eventId: number,
     status: 'pending' | 'attended' | 'absent' | 'cancelled',
+    scope: 'single' | 'series' = 'single',
   ) => {
     setParticipationUpdating(eventId)
     setError(null)
     try {
-      await updateCalendarEvent(eventId, { status })
+      await updateCalendarEvent(eventId, { status, scope })
       await loadEvents()
     } catch (err) {
       console.error('Kalenderstatus konnte nicht gespeichert werden', err)
@@ -67,8 +70,30 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
     }
   }
 
+  const requestCancellationScope = (event: CalendarEvent) => {
+    if (event.series_event_count > 1) {
+      setSeriesDialogEvent(event)
+      return
+    }
+    void handleStatusChange(event.id, 'cancelled')
+  }
+
+  const handleSeriesScopeSelection = async (scope: 'single' | 'series') => {
+    if (!seriesDialogEvent) {
+      return
+    }
+    try {
+      await handleStatusChange(seriesDialogEvent.id, 'cancelled', scope)
+    } finally {
+      setSeriesDialogEvent(null)
+    }
+  }
+
+  const closeSeriesDialog = () => setSeriesDialogEvent(null)
+
   return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
+    <>
+      <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
       <div className="flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-slate-100">Kalendereinträge heute</h2>
@@ -134,7 +159,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
                   </button>
                   <button
                     type="button"
-                    onClick={() => handleStatusChange(event.id, 'cancelled')}
+                    onClick={() => requestCancellationScope(event)}
                     disabled={participationUpdating === event.id}
                     className={`rounded-md border px-2 py-1 text-xs transition disabled:cursor-not-allowed disabled:opacity-60 ${
                       event.status === 'cancelled'
@@ -196,6 +221,13 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
           )
         })}
       </div>
-    </div>
+      </div>
+      <SeriesScopeDialog
+        open={!!seriesDialogEvent}
+        eventTitle={seriesDialogEvent?.title ?? ''}
+        onSelect={handleSeriesScopeSelection}
+        onCancel={closeSeriesDialog}
+      />
+    </>
   )
 }
