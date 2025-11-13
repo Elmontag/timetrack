@@ -107,6 +107,11 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
                     {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
                   </span>
                 </span>
+                <span className="text-[11px] lowercase text-slate-500">
+                  {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                    ? `CalDAV: ${event.calendar_identifier}`
+                    : 'Lokal'}
+                </span>
                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide">
                   <button
                     type="button"
@@ -187,6 +192,14 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
                       </ul>
                     </div>
                   )}
+                  <div>
+                    <p className="font-medium uppercase tracking-wide text-slate-500">Quelle</p>
+                    <p className="mt-1 text-slate-200">
+                      {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                        ? `CalDAV (${event.calendar_identifier})`
+                        : 'Lokal'}
+                    </p>
+                  </div>
                   {!event.description && !event.location && event.attendees.length === 0 && (
                     <p className="text-slate-500">Keine zusätzlichen Details vorhanden.</p>
                   )}

@@ -5,6 +5,7 @@ import { FormEvent, Fragment, useCallback, useEffect, useMemo, useState } from '
 import {
   CalendarEvent,
   createCalendarEvent,
+  deleteCalendarEvent,
   getSettings,
   listCalendarEvents,
   updateCalendarEvent,
@@ -89,6 +90,25 @@ export function CalendarPanel({ refreshKey }: Props) {
   const [submitting, setSubmitting] = useState(false)
   const [expandedRows, setExpandedRows] = useState<number[]>([])
   const [participationUpdating, setParticipationUpdating] = useState<number | null>(null)
+  const seriesCounts = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const event of events) {
+      if (!event.external_id) {
+        continue
+      }
+      const key = `${event.calendar_identifier ?? 'manual'}::${event.external_id}`
+      map.set(key, (map.get(key) ?? 0) + 1)
+    }
+    return map
+  }, [events])
+  const [deleteContext, setDeleteContext] = useState<{
+    event: CalendarEvent
+    seriesCount: number
+  } | null>(null)
+  const [deleteScope, setDeleteScope] = useState<'occurrence' | 'series'>('occurrence')
+  const [deleteRemote, setDeleteRemote] = useState(false)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [deleteSubmitting, setDeleteSubmitting] = useState(false)
   const eventsByDate = useMemo(() => {
     const map = new Map<string, CalendarEvent[]>()
     for (const event of events) {
@@ -333,6 +353,49 @@ export function CalendarPanel({ refreshKey }: Props) {
     )
   }
 
+  const openDeleteDialog = useCallback(
+    (event: CalendarEvent) => {
+      const seriesKey = event.external_id
+        ? `${event.calendar_identifier ?? 'manual'}::${event.external_id}`
+        : null
+      const occurrences = seriesKey ? seriesCounts.get(seriesKey) ?? 1 : 1
+      setDeleteContext({ event, seriesCount: occurrences })
+      setDeleteScope(occurrences > 1 || Boolean(event.recurrence_id) ? 'occurrence' : 'series')
+      setDeleteRemote(false)
+      setDeleteError(null)
+      setDeleteSubmitting(false)
+    },
+    [seriesCounts],
+  )
+
+  const closeDeleteDialog = useCallback(() => {
+    setDeleteContext(null)
+    setDeleteError(null)
+    setDeleteSubmitting(false)
+    setDeleteRemote(false)
+  }, [])
+
+  const confirmDelete = useCallback(async () => {
+    if (!deleteContext) {
+      return
+    }
+    setDeleteSubmitting(true)
+    setDeleteError(null)
+    try {
+      await deleteCalendarEvent(deleteContext.event.id, {
+        scope: deleteScope,
+        delete_remote: deleteRemote,
+      })
+      await loadEvents()
+      closeDeleteDialog()
+    } catch (error) {
+      console.error('Kalendereintrag konnte nicht gelöscht werden', error)
+      setDeleteError('Kalendereintrag konnte nicht gelöscht werden.')
+    } finally {
+      setDeleteSubmitting(false)
+    }
+  }, [closeDeleteDialog, deleteContext, deleteRemote, deleteScope, loadEvents])
+
   const renderStatusActions = (event: CalendarEvent) => (
     <div className="flex flex-wrap gap-2">
       <button
@@ -384,8 +447,27 @@ export function CalendarPanel({ refreshKey }: Props) {
           Zurücksetzen
         </button>
       )}
+      <button
+        type="button"
+        onClick={() => openDeleteDialog(event)}
+        className="rounded-md border border-rose-500/60 px-2 py-1 text-xs text-rose-300 transition hover:border-rose-400 hover:text-rose-200"
+      >
+        Löschen
+      </button>
     </div>
   )
+
+  const deleteTargetEvent = deleteContext?.event
+  const deleteSeriesCandidate =
+    deleteContext != null &&
+    (deleteContext.seriesCount > 1 || Boolean(deleteContext.event.recurrence_id))
+  const deleteRemoteAvailable =
+    deleteContext != null &&
+    Boolean(
+      deleteContext.event.external_id &&
+        deleteContext.event.calendar_identifier &&
+        deleteContext.event.calendar_identifier !== 'manual',
+    )
 
   return (
     <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
@@ -581,6 +663,110 @@ export function CalendarPanel({ refreshKey }: Props) {
           </div>
         </form>
       </Lightbox>
+      <Lightbox
+        open={Boolean(deleteContext)}
+        onClose={() => {
+          if (!deleteSubmitting) {
+            closeDeleteDialog()
+          }
+        }}
+        title="Kalendereintrag löschen"
+        footer={
+          <>
+            <button
+              type="button"
+              onClick={closeDeleteDialog}
+              disabled={deleteSubmitting}
+              className="rounded-md border border-slate-700 px-4 py-2 text-sm text-slate-200 transition hover:border-primary hover:text-primary disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Abbrechen
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (!deleteSubmitting) {
+                  void confirmDelete()
+                }
+              }}
+              disabled={deleteSubmitting}
+              className="rounded-md border border-rose-500/70 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-200 transition hover:border-rose-400 hover:bg-rose-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              Termin löschen
+            </button>
+          </>
+        }
+      >
+        {deleteTargetEvent ? (
+          <>
+            <p className="text-sm text-slate-300">
+              Sollen der Termin{' '}
+              <span className="font-semibold text-slate-100">{deleteTargetEvent.title}</span> am{' '}
+              {dayjs(deleteTargetEvent.start_time).format('DD.MM.YYYY HH:mm')} gelöscht werden?
+            </p>
+            {deleteSeriesCandidate ? (
+              <div>
+                <p className="text-xs uppercase tracking-wide text-slate-500">Serienauswahl</p>
+                <div className="mt-2 space-y-2 text-sm text-slate-200">
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="delete-scope"
+                      value="occurrence"
+                      checked={deleteScope === 'occurrence'}
+                      onChange={() => setDeleteScope('occurrence')}
+                      disabled={deleteSubmitting}
+                      className="h-4 w-4 border border-slate-600 text-primary focus:ring-primary"
+                    />
+                    Nur dieses Vorkommen entfernen
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="radio"
+                      name="delete-scope"
+                      value="series"
+                      checked={deleteScope === 'series'}
+                      onChange={() => setDeleteScope('series')}
+                      disabled={deleteSubmitting}
+                      className="h-4 w-4 border border-slate-600 text-primary focus:ring-primary"
+                    />
+                    Komplette Serie entfernen
+                  </label>
+                </div>
+              </div>
+            ) : (
+              <p className="text-xs text-slate-500">
+                Dieser Termin gehört zu keiner Serie und wird vollständig gelöscht.
+              </p>
+            )}
+            <div>
+              <p className="text-xs uppercase tracking-wide text-slate-500">CalDAV</p>
+              {deleteRemoteAvailable ? (
+                <label className="mt-2 flex items-center gap-2 text-sm text-slate-200">
+                  <input
+                    type="checkbox"
+                    checked={deleteRemote}
+                    onChange={(event) => setDeleteRemote(event.target.checked)}
+                    disabled={deleteSubmitting}
+                    className="h-4 w-4 rounded border border-slate-600 text-primary focus:ring-primary"
+                  />
+                  Auch im CalDAV-Kalender {deleteTargetEvent.calendar_identifier} entfernen
+                </label>
+              ) : (
+                <p className="mt-2 text-xs text-slate-500">
+                  Termin ist nur lokal vorhanden und wird ausschließlich hier gelöscht.
+                </p>
+              )}
+            </div>
+            {deleteError && (
+              <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-300">
+                {deleteError}
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-sm text-slate-300">Kein Termin ausgewählt.</p>
+        )}
+      </Lightbox>
       <div className="mt-6 space-y-4">
         {error && !loading && (
           <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">{error}</p>
@@ -667,6 +853,14 @@ export function CalendarPanel({ refreshKey }: Props) {
                                     </ul>
                                   </div>
                                 )}
+                                <div>
+                                  <p className="text-xs uppercase tracking-wide text-slate-500">Quelle</p>
+                                  <p className="text-slate-300">
+                                    {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                                      ? `CalDAV (${event.calendar_identifier})`
+                                      : 'Lokal'}
+                                  </p>
+                                </div>
                                 {!event.description && !event.location && event.attendees.length === 0 && (
                                   <p className="text-xs text-slate-500">Keine zusätzlichen Details vorhanden.</p>
                                 )}
@@ -718,6 +912,11 @@ export function CalendarPanel({ refreshKey }: Props) {
                                 >
                                   {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
                                 </span>
+                                <p className="mt-1 text-[11px] text-slate-500">
+                                  {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                                    ? `CalDAV: ${event.calendar_identifier}`
+                                    : 'Lokal'}
+                                </p>
                                 {event.location && (
                                   <p className="mt-1 text-xs text-slate-400">Ort: {event.location}</p>
                                 )}
@@ -790,6 +989,11 @@ export function CalendarPanel({ refreshKey }: Props) {
                       </div>
                       <p className="mt-1 text-xs text-slate-400">
                         {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                          ? `CalDAV: ${event.calendar_identifier}`
+                          : 'Lokal'}
                       </p>
                       {event.location && <p className="text-xs text-slate-400">Ort: {event.location}</p>}
                       {event.description && <p className="mt-1 text-xs text-slate-400">{event.description}</p>}

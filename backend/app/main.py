@@ -5,7 +5,7 @@ import mimetypes
 from pathlib import Path
 from typing import Optional
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from sqlalchemy import inspect, text
@@ -20,6 +20,7 @@ from .schemas import (
     ActionTokenCreatedResponse,
     ActionTokenResult,
     CalendarEventCreateRequest,
+    CalendarEventDeleteRequest,
     CalendarEventResponse,
     CalendarEventUpdateRequest,
     CalDAVCalendarResponse,
@@ -59,6 +60,7 @@ from .services import (
     build_travel_dataset_archive,
     build_travel_dataset_pdf,
     create_calendar_event,
+    delete_calendar_event,
     create_holiday,
     create_subtrack,
     create_leave,
@@ -401,9 +403,15 @@ def get_caldav_calendars(request: Request) -> list[CalDAVCalendarResponse]:
 
 
 @app.post("/calendar/events", response_model=CalendarEventResponse, status_code=status.HTTP_201_CREATED)
-def create_calendar_event_entry(payload: CalendarEventCreateRequest, db: Session = Depends(get_db)) -> CalendarEventResponse:
+def create_calendar_event_entry(
+    payload: CalendarEventCreateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+) -> CalendarEventResponse:
+    state: RuntimeState = request.app.state.runtime_state
     event = create_calendar_event(
         db,
+        state,
         payload.title,
         payload.start_time,
         payload.end_time,
@@ -412,6 +420,7 @@ def create_calendar_event_entry(payload: CalendarEventCreateRequest, db: Session
         payload.participated,
         payload.status,
         payload.attendees,
+        sync_to_caldav=payload.sync_to_caldav,
     )
     return event
 
@@ -433,6 +442,25 @@ def update_calendar_event(
         ignored=payload.ignored,
     )
     return event
+
+
+@app.delete("/calendar/events/{event_id}", status_code=status.HTTP_204_NO_CONTENT)
+def remove_calendar_event(
+    event_id: int,
+    request: Request,
+    payload: CalendarEventDeleteRequest | None = Body(default=None),
+    db: Session = Depends(get_db),
+) -> Response:
+    state: RuntimeState = request.app.state.runtime_state
+    options = payload or CalendarEventDeleteRequest()
+    delete_calendar_event(
+        db,
+        state,
+        event_id,
+        options.scope,
+        delete_remote=options.delete_remote,
+    )
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @app.get("/travels", response_model=list[TravelTripResponse])

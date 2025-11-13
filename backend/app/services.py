@@ -51,6 +51,7 @@ else:  # pragma: no cover - only set when caldav is available
     _CALDAV_IMPORT_ERROR = None
 
 
+
 UTC = dt.timezone.utc
 LOCAL_TZ = ZoneInfo(settings.timezone)
 
@@ -158,6 +159,264 @@ def _calendar_matches_selection(selection: Iterable[str], *candidates: Optional[
         if candidate_id and candidate_id.casefold() in normalized:
             return True
     return False
+
+
+def _format_ical_datetime(value: dt.datetime) -> str:
+    return _ensure_utc(value).strftime("%Y%m%dT%H%M%SZ")
+
+
+def _escape_ical_text(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    escaped = value.replace("\\", "\\\\").replace("\n", "\\n").replace(",", "\\,").replace(";", "\\;")
+    return escaped
+
+
+def _normalize_recurrence_value(raw: Optional[str]) -> Optional[str]:
+    if raw is None:
+        return None
+    value = raw.strip()
+    if not value:
+        return None
+    candidates = [
+        value,
+        value.replace("Z", "+00:00") if value.endswith("Z") else value,
+    ]
+    for candidate in candidates:
+        try:
+            parsed = dt.datetime.fromisoformat(candidate)
+        except ValueError:
+            parsed = None
+        if parsed is not None:
+            if parsed.tzinfo is None:
+                parsed = parsed.replace(tzinfo=LOCAL_TZ)
+            return parsed.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+    for fmt in ("%Y%m%dT%H%M%SZ", "%Y%m%dT%H%M%S", "%Y%m%d"):
+        try:
+            parsed = dt.datetime.strptime(value, fmt)
+        except ValueError:
+            continue
+        if fmt == "%Y%m%dT%H%M%S" or fmt == "%Y%m%d":
+            parsed = parsed.replace(tzinfo=LOCAL_TZ)
+        else:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed.astimezone(UTC).strftime("%Y%m%dT%H%M%SZ")
+    return value
+
+
+def _locate_caldav_calendar(client: Any, target_identifier: str):
+    if client is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="CalDAV support is not installed",
+        )
+    normalized_target = normalize_calendar_identifier(target_identifier)
+    if not normalized_target:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Kein CalDAV-Standardkalender konfiguriert",
+        )
+    try:
+        principal = client.principal()
+        calendars = principal.calendars()
+    except Exception as exc:  # pragma: no cover - remote errors
+        auth_error = getattr(caldav_error, "AuthorizationError", None)
+        if auth_error and isinstance(exc, auth_error):  # type: ignore[arg-type]
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="CalDAV-Anmeldung fehlgeschlagen",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="CalDAV-Kalender konnten nicht geladen werden",
+        ) from exc
+
+    for calendar in calendars:
+        calendar_id = normalize_calendar_identifier(getattr(calendar, "url", None))
+        calendar_name = normalize_calendar_identifier(getattr(calendar, "name", None))
+        for candidate in (calendar_id, calendar_name):
+            if candidate and candidate.casefold() == normalized_target.casefold():
+                return calendar, candidate
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="CalDAV-Standardkalender wurde nicht gefunden",
+    )
+
+
+def _extract_recurrence_from_block(block: List[str]) -> Optional[str]:
+    for line in block:
+        if line.startswith("RECURRENCE-ID"):
+            try:
+                _, value = line.split(":", 1)
+            except ValueError:
+                continue
+            return value.strip()
+    return None
+
+
+def _block_has_exdate(block: List[str], target: str) -> bool:
+    for line in block:
+        if line.startswith("EXDATE"):
+            try:
+                _, value = line.split(":", 1)
+            except ValueError:
+                continue
+            if value.strip() == target:
+                return True
+    return False
+
+
+def _remove_occurrence_from_remote_data(
+    raw_data: str,
+    recurrence_id: str,
+    start_time: dt.datetime,
+) -> Optional[str]:
+    normalized = raw_data.replace("\r\n", "\n")
+    normalized = re.sub(r"\n[ \t]", "", normalized)
+    lines = normalized.split("\n")
+
+    segments: List[Tuple[str, List[str]]] = []
+    buffer: List[str] = []
+    inside = False
+
+    for line in lines:
+        if line == "BEGIN:VEVENT":
+            if buffer and not inside:
+                segments.append(("text", buffer))
+            buffer = [line]
+            inside = True
+        elif line == "END:VEVENT" and inside:
+            buffer.append(line)
+            segments.append(("vevent", buffer))
+            buffer = []
+            inside = False
+        else:
+            buffer.append(line)
+
+    if buffer:
+        segments.append((("vevent" if inside else "text"), buffer))
+
+    target_norm = _normalize_recurrence_value(recurrence_id)
+    exdate_value = _format_ical_datetime(start_time)
+    filtered_segments: List[Tuple[str, List[str]]] = []
+    master_index: Optional[int] = None
+    changed = False
+
+    for kind, block in segments:
+        if kind != "vevent":
+            filtered_segments.append((kind, list(block)))
+            continue
+
+        block_recurrence = _extract_recurrence_from_block(block)
+        block_norm = _normalize_recurrence_value(block_recurrence)
+        if block_recurrence is not None and target_norm is not None:
+            if block_recurrence.strip() == recurrence_id.strip() or block_norm == target_norm:
+                changed = True
+                continue
+
+        copied = list(block)
+        if block_recurrence is None and master_index is None:
+            master_index = len(filtered_segments)
+        filtered_segments.append((kind, copied))
+
+    if master_index is None:
+        return None
+
+    master_kind, master_block = filtered_segments[master_index]
+    if master_kind != "vevent":
+        return None
+
+    if not _block_has_exdate(master_block, exdate_value):
+        insert_at = len(master_block)
+        for index, line in enumerate(master_block):
+            if line == "END:VEVENT":
+                insert_at = index
+                break
+        master_block.insert(insert_at, f"EXDATE:{exdate_value}")
+        changed = True
+
+    if not changed:
+        return None
+
+    output_lines: List[str] = []
+    for _, block in filtered_segments:
+        output_lines.extend(block)
+    rendered = "\r\n".join(output_lines)
+    if not rendered.endswith("\r\n"):
+        rendered += "\r\n"
+    return rendered
+
+
+def _delete_remote_calendar_event(
+    state: RuntimeState,
+    event: CalendarEvent,
+    scope: Literal["occurrence", "series"],
+) -> None:
+    if not event.external_id or not event.calendar_identifier or event.calendar_identifier == "manual":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Termin ist nicht mit einem CalDAV-Kalender verknüpft.",
+        )
+
+    client = _build_caldav_client(state, strict=True)
+    calendar, _ = _locate_caldav_calendar(client, event.calendar_identifier)
+
+    try:
+        remote_event = calendar.event_by_uid(event.external_id)
+    except Exception as exc:  # pragma: no cover - remote errors
+        not_found = getattr(caldav_error, "NotFoundError", None)
+        if not_found and isinstance(exc, not_found):  # type: ignore[arg-type]
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Termin im CalDAV-Kalender wurde nicht gefunden.",
+            ) from exc
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="CalDAV-Termin konnte nicht geladen werden.",
+        ) from exc
+
+    if scope == "series" or not event.recurrence_id:
+        try:
+            remote_event.delete()
+        except Exception as exc:  # pragma: no cover - remote errors
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="CalDAV-Termin konnte nicht gelöscht werden.",
+            ) from exc
+        return
+
+    raw_data = remote_event.data
+    if not raw_data:
+        try:
+            remote_event.delete()
+        except Exception as exc:  # pragma: no cover
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="CalDAV-Termin konnte nicht gelöscht werden.",
+            ) from exc
+        return
+
+    updated_payload = _remove_occurrence_from_remote_data(
+        raw_data if isinstance(raw_data, str) else raw_data.decode("utf-8", errors="ignore"),
+        event.recurrence_id,
+        _ensure_utc(event.start_time),
+    )
+
+    if not updated_payload:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Der Termin konnte im CalDAV-Kalender nicht angepasst werden.",
+        )
+
+    remote_event.data = updated_payload
+    try:
+        remote_event.save()
+    except Exception as exc:  # pragma: no cover - remote errors
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="CalDAV-Termin konnte nicht gespeichert werden.",
+        ) from exc
 
 
 def _fetch_caldav_occurrences(
@@ -1405,6 +1664,7 @@ def import_holidays_from_ics(db: Session, content: str) -> List[Holiday]:
 
 def create_calendar_event(
     db: Session,
+    state: RuntimeState,
     title: str,
     start_time: dt.datetime,
     end_time: dt.datetime,
@@ -1413,6 +1673,8 @@ def create_calendar_event(
     participated: bool,
     status_value: Optional[str],
     attendees: Optional[List[str]] = None,
+    *,
+    sync_to_caldav: bool = False,
 ) -> CalendarEvent:
     start_time_utc = _ensure_utc(start_time)
     end_time_utc = _ensure_utc(end_time)
@@ -1423,6 +1685,53 @@ def create_calendar_event(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unbekannter Kalenderstatus")
     ignored = status_normalized == "cancelled"
     effective_participated = status_normalized == "attended"
+
+    calendar_identifier = "manual"
+    external_id: Optional[str] = None
+
+    if sync_to_caldav:
+        client = _build_caldav_client(state, strict=True)
+        default_calendar = state.caldav_default_cal or calendar_identifier
+        calendar, normalized_identifier = _locate_caldav_calendar(client, default_calendar)
+        uid = str(uuid.uuid4())
+        status_ical = {
+            "pending": "TENTATIVE",
+            "attended": "CONFIRMED",
+            "absent": "CONFIRMED",
+            "cancelled": "CANCELLED",
+        }.get(status_normalized, "TENTATIVE")
+        summary = _escape_ical_text(title) or "Unbenannter Termin"
+        lines = [
+            "BEGIN:VCALENDAR",
+            "VERSION:2.0",
+            "PRODID:-//TimeTrack//DE",
+            "CALSCALE:GREGORIAN",
+            "BEGIN:VEVENT",
+            f"UID:{uid}",
+            f"DTSTAMP:{_format_ical_datetime(_now())}",
+            f"DTSTART:{_format_ical_datetime(start_time_utc)}",
+            f"DTEND:{_format_ical_datetime(end_time_utc)}",
+            f"SUMMARY:{summary}",
+            f"STATUS:{status_ical}",
+        ]
+        escaped_description = _escape_ical_text(description)
+        escaped_location = _escape_ical_text(location)
+        if escaped_description:
+            lines.append(f"DESCRIPTION:{escaped_description}")
+        if escaped_location:
+            lines.append(f"LOCATION:{escaped_location}")
+        lines.extend(["END:VEVENT", "END:VCALENDAR"])
+        payload = "\r\n".join(lines) + "\r\n"
+        try:
+            calendar.add_event(payload)
+        except Exception as exc:  # pragma: no cover - remote errors
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="CalDAV-Termin konnte nicht angelegt werden.",
+            ) from exc
+        calendar_identifier = normalized_identifier or default_calendar or "caldav"
+        external_id = uid
+
     event = CalendarEvent(
         title=title,
         start_time=start_time_utc,
@@ -1433,7 +1742,8 @@ def create_calendar_event(
         status=status_normalized,
         ignored=ignored,
         attendees=list(attendees or []),
-        calendar_identifier="manual",
+        calendar_identifier=calendar_identifier,
+        external_id=external_id,
     )
     db.add(event)
     db.commit()
@@ -1521,6 +1831,41 @@ def set_calendar_participation(
     db.commit()
     db.refresh(event)
     return event
+
+
+def delete_calendar_event(
+    db: Session,
+    state: RuntimeState,
+    event_id: int,
+    scope: Literal["occurrence", "series"],
+    *,
+    delete_remote: bool = False,
+) -> None:
+    event = db.query(CalendarEvent).filter(CalendarEvent.id == event_id).one_or_none()
+    if not event:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Calendar event not found")
+
+    if scope == "series" and event.external_id:
+        events_to_delete = (
+            db.query(CalendarEvent)
+            .filter(CalendarEvent.external_id == event.external_id)
+            .filter(CalendarEvent.calendar_identifier == event.calendar_identifier)
+            .all()
+        )
+        if not events_to_delete:
+            events_to_delete = [event]
+    else:
+        events_to_delete = [event]
+
+    if delete_remote:
+        _delete_remote_calendar_event(state, event, scope)
+
+    seen: Dict[int, CalendarEvent] = {}
+    for item in events_to_delete:
+        seen[item.id] = item
+    for item in seen.values():
+        db.delete(item)
+    db.commit()
 
 
 def update_runtime_settings(db: Session, state: RuntimeState, updates: dict) -> dict:
