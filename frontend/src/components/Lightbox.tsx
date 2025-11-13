@@ -14,9 +14,9 @@ export function Lightbox({ open, title, onClose, children, footer, contentClassN
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 px-4 py-8 backdrop-blur-sm dark:bg-slate-950/80">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/30 px-4 py-8 backdrop-blur-sm dark:bg-slate-950/80">
       <div
-        className="w-full max-w-2xl rounded-2xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-slate-800 dark:bg-slate-950/90"
+        className="w-full max-w-2xl rounded-2xl border border-slate-100 bg-white/95 p-6 shadow-2xl backdrop-blur-lg dark:border-slate-800 dark:bg-slate-950/90"
         role="dialog"
         aria-modal="true"
         aria-label={title}

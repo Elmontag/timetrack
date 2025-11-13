@@ -327,7 +327,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
   )
 
   const renderHoverPreview = () => (
-    <div className="w-72 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-2xl backdrop-blur-sm dark:border-slate-800 dark:bg-slate-950/95">
+    <div className="w-72 rounded-2xl border border-slate-200 bg-white/98 p-4 shadow-2xl backdrop-blur-sm dark:border-slate-800 dark:bg-slate-950/95">
       <div className="space-y-3">
         {loading && <p className="text-sm text-slate-500 dark:text-slate-400">Lade Termine…</p>}
         {error && !loading && <p className="text-sm text-rose-600 dark:text-rose-300">{error}</p>}
@@ -338,7 +338,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
           events.map((event) => (
             <div
               key={event.id}
-              className="rounded-xl border border-slate-200 bg-slate-50/95 p-3 dark:border-slate-800 dark:bg-slate-900/70"
+              className="rounded-xl border border-slate-200 bg-slate-50/95 p-3 shadow-sm dark:border-slate-800 dark:bg-slate-900/70"
             >
               <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{event.title}</p>
               <div className="mt-2 flex items-center justify-between text-xs">
@@ -347,7 +347,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
                 </span>
                 <span
                   className={
-                    'rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium dark:border-slate-700 dark:bg-slate-950/70 ' +
+                    'rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-950/70 ' +
                     (STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className)
                   }
                 >
@@ -394,7 +394,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
             </button>
           </div>
           {collapsedHover && (
-            <div className="absolute right-0 top-full z-20 mt-3" role="dialog" aria-label="Heutige Termine Vorschau">
+            <div className="absolute right-0 top-full z-50 mt-3" role="dialog" aria-label="Heutige Termine Vorschau">
               {renderHoverPreview()}
             </div>
           )}
