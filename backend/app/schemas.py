@@ -237,6 +237,9 @@ class CalendarEventResponse(BaseModel):
     status: str
     ignored: bool
     attendees: list[str]
+    calendar_identifier: Optional[str]
+    external_id: Optional[str]
+    recurrence_id: Optional[str]
 
     @model_serializer(mode="plain", when_used="json")
     def _serialize(self) -> dict[str, Any]:
@@ -251,6 +254,9 @@ class CalendarEventResponse(BaseModel):
             "status": self.status,
             "ignored": self.ignored,
             "attendees": list(self.attendees or []),
+            "calendar_identifier": self.calendar_identifier,
+            "external_id": self.external_id,
+            "recurrence_id": self.recurrence_id,
         }
 
 
@@ -268,12 +274,18 @@ class CalendarEventCreateRequest(BaseModel):
     participated: bool = False
     status: Optional[str] = None
     attendees: list[str] = []
+    sync_to_caldav: bool = False
 
 
 class CalendarEventUpdateRequest(BaseModel):
     participated: Optional[bool] = None
     status: Optional[str] = None
     ignored: Optional[bool] = None
+
+
+class CalendarEventDeleteRequest(BaseModel):
+    scope: Literal["occurrence", "series"] = "occurrence"
+    delete_remote: bool = False
 
 
 class SubtrackResponse(BaseModel):

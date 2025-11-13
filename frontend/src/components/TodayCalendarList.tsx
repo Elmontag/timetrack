@@ -20,12 +20,22 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
   const [error, setError] = useState<string | null>(null)
   const [expanded, setExpanded] = useState<number[]>([])
   const [participationUpdating, setParticipationUpdating] = useState<number | null>(null)
+  const [selectedDay, setSelectedDay] = useState(day)
+  const [isCollapsed, setIsCollapsed] = useState(false)
+  const [collapsedHover, setCollapsedHover] = useState(false)
+
+  useEffect(() => {
+    setSelectedDay(day)
+  }, [day])
 
   const loadEvents = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
-      const data = await listCalendarEvents({ from_date: day, to_date: day })
+      const data = await listCalendarEvents({
+        from_date: selectedDay,
+        to_date: selectedDay,
+      })
       setEvents(data)
     } catch (err) {
       console.error('Kalender konnte nicht geladen werden', err)
@@ -34,7 +44,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
     } finally {
       setLoading(false)
     }
-  }, [day])
+  }, [selectedDay])
 
   useEffect(() => {
     loadEvents()
@@ -43,6 +53,33 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
   useEffect(() => {
     setExpanded((prev) => prev.filter((id) => events.some((event) => event.id === id)))
   }, [events])
+
+  useEffect(() => {
+    setExpanded([])
+    setError(null)
+    setCollapsedHover(false)
+  }, [selectedDay])
+
+  useEffect(() => {
+    if (!isCollapsed) {
+      setCollapsedHover(false)
+    }
+  }, [isCollapsed])
+
+  const changeDay = (offset: number) => {
+    setSelectedDay((prev) => dayjs(prev).add(offset, 'day').format('YYYY-MM-DD'))
+  }
+
+  const toggleCollapse = () =>
+    setIsCollapsed((prev) => {
+      const next = !prev
+      if (next) {
+        setExpanded([])
+      }
+      return next
+    })
+
+  const isToday = selectedDay === dayjs().format('YYYY-MM-DD')
 
   const toggleDetails = (eventId: number) => {
     setExpanded((prev) =>
@@ -67,22 +104,99 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
     }
   }
 
-  return (
-    <div className="rounded-2xl border border-slate-800 bg-slate-900/70 p-6">
-      <div className="flex items-center justify-between">
+  const handleCollapsedEnter = () => setCollapsedHover(true)
+  const handleCollapsedLeave = () => setCollapsedHover(false)
+
+  const renderPanel = (compact: boolean) => (
+    <div
+      className={
+        compact
+          ? 'w-80 rounded-2xl border border-slate-800 bg-slate-900/90 p-5 shadow-2xl'
+          : 'rounded-2xl border border-slate-800 bg-slate-900/70 p-6'
+      }
+    >
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-          <h2 className="text-lg font-semibold text-slate-100">Kalendereinträge heute</h2>
-          <p className="text-sm text-slate-400">Importierte Termine des Tages und Teilnahme-Status.</p>
+          <h2 className="text-lg font-semibold text-slate-100">
+            {isToday ? 'Heutige Termine' : `Termine am ${dayjs(selectedDay).format('DD.MM.YYYY')}`}
+          </h2>
+          <p className="text-sm text-slate-400">Importierte Termine und Teilnahme-Status.</p>
         </div>
-        <span className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs font-medium text-slate-300">
-          {dayjs(day).format('DD.MM.')}
-        </span>
+        <div className="flex items-center gap-2 self-end sm:self-auto">
+          <button
+            type="button"
+            onClick={() => changeDay(-1)}
+            className="rounded-full border border-slate-700 bg-slate-950/70 p-1 text-slate-300 transition hover:border-primary hover:text-primary"
+            aria-label="Vorheriger Tag"
+          >
+            <svg
+              className="h-4 w-4"
+              viewBox="0 0 20 20"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M12.5 5l-5 5 5 5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          <span className="rounded-full border border-slate-700 bg-slate-950/60 px-3 py-1 text-xs font-medium text-slate-300">
+            {dayjs(selectedDay).format('dd, DD.MM.YYYY')}
+          </span>
+          <button
+            type="button"
+            onClick={() => changeDay(1)}
+            className="rounded-full border border-slate-700 bg-slate-950/70 p-1 text-slate-300 transition hover:border-primary hover:text-primary"
+            aria-label="Nächster Tag"
+          >
+            <svg
+              className="h-4 w-4"
+              viewBox="0 0 20 20"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d="M7.5 5l5 5-5 5"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+          <button
+            type="button"
+            onClick={toggleCollapse}
+            aria-expanded={!isCollapsed}
+            aria-label={isCollapsed ? 'Termine anzeigen' : 'Termine verbergen'}
+            className="rounded-full border border-slate-700 bg-slate-950/70 p-1 text-slate-300 transition hover:border-primary hover:text-primary"
+          >
+            <svg
+              className="h-4 w-4"
+              viewBox="0 0 20 20"
+              fill="none"
+              xmlns="http://www.w3.org/2000/svg"
+            >
+              <path
+                d={isCollapsed ? 'M5 8l5 5 5-5' : 'M5 12l5-5 5 5'}
+                stroke="currentColor"
+                strokeWidth="1.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </button>
+        </div>
       </div>
       <div className="mt-4 space-y-3">
         {loading && <p className="text-sm text-slate-400">Lade Termine…</p>}
         {error && !loading && <p className="text-sm text-rose-300">{error}</p>}
         {!loading && events.length === 0 && (
-          <p className="text-sm text-slate-500">Keine Termine für heute.</p>
+          <p className="text-sm text-slate-500">Keine Termine für diesen Tag.</p>
         )}
         {events.map((event) => {
           const isExpanded = expanded.includes(event.id)
@@ -106,6 +220,11 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
                   >
                     {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
                   </span>
+                </span>
+                <span className="text-[11px] lowercase text-slate-500">
+                  {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                    ? `CalDAV: ${event.calendar_identifier}`
+                    : 'Lokal'}
                 </span>
                 <div className="flex items-center gap-2 text-[10px] uppercase tracking-wide">
                   <button
@@ -187,6 +306,14 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
                       </ul>
                     </div>
                   )}
+                  <div>
+                    <p className="font-medium uppercase tracking-wide text-slate-500">Quelle</p>
+                    <p className="mt-1 text-slate-200">
+                      {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                        ? `CalDAV (${event.calendar_identifier})`
+                        : 'Lokal'}
+                    </p>
+                  </div>
                   {!event.description && !event.location && event.attendees.length === 0 && (
                     <p className="text-slate-500">Keine zusätzlichen Details vorhanden.</p>
                   )}
@@ -198,4 +325,80 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
       </div>
     </div>
   )
+
+  const renderHoverPreview = () => (
+    <div className="w-72 rounded-2xl border border-slate-800 bg-slate-950/95 p-4 shadow-2xl">
+      <div className="space-y-3">
+        {loading && <p className="text-sm text-slate-400">Lade Termine…</p>}
+        {error && !loading && <p className="text-sm text-rose-300">{error}</p>}
+        {!loading && events.length === 0 && (
+          <p className="text-sm text-slate-500">Keine Termine für diesen Tag.</p>
+        )}
+        {!loading &&
+          events.map((event) => (
+            <div key={event.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+              <p className="text-sm font-semibold text-slate-100">{event.title}</p>
+              <div className="mt-2 flex items-center justify-between text-xs">
+                <span className="font-mono text-slate-300">
+                  {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
+                </span>
+                <span
+                  className={
+                    'rounded-full bg-slate-950/70 px-2 py-0.5 ' +
+                    (STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className)
+                  }
+                >
+                  {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
+                </span>
+              </div>
+            </div>
+          ))}
+      </div>
+    </div>
+  )
+
+  if (isCollapsed) {
+    return (
+      <div className="flex justify-end">
+        <div
+          className="relative"
+          onMouseEnter={handleCollapsedEnter}
+          onMouseLeave={handleCollapsedLeave}
+        >
+          <div className="inline-flex items-center gap-2 rounded-full border border-slate-700 bg-slate-950/70 px-3 py-1.5 text-xs font-medium text-slate-200 shadow-sm">
+            <span>{dayjs(selectedDay).format('dd, DD.MM.YYYY')}</span>
+            <button
+              type="button"
+              onClick={toggleCollapse}
+              aria-expanded={!isCollapsed}
+              aria-label="Termine anzeigen"
+              className="rounded-full border border-slate-700 bg-slate-900/80 p-1 text-slate-300 transition hover:border-primary hover:text-primary"
+            >
+              <svg
+                className="h-4 w-4"
+                viewBox="0 0 20 20"
+                fill="none"
+                xmlns="http://www.w3.org/2000/svg"
+              >
+                <path
+                  d="M5 8l5 5 5-5"
+                  stroke="currentColor"
+                  strokeWidth="1.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+          </div>
+          {collapsedHover && (
+            <div className="absolute right-0 top-full z-20 mt-3" role="dialog" aria-label="Heutige Termine Vorschau">
+              {renderHoverPreview()}
+            </div>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  return renderPanel(false)
 }

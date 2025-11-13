@@ -71,6 +71,9 @@ export interface CalendarEvent {
   status: string
   ignored: boolean
   attendees: string[]
+  calendar_identifier: string | null
+  external_id: string | null
+  recurrence_id: string | null
 }
 
 export interface TravelInvoiceReference {
@@ -361,9 +364,21 @@ export async function createCalendarEvent(payload: {
   participated?: boolean
   status?: string
   attendees?: string[]
+  sync_to_caldav?: boolean
 }) {
   const response = await client.post<CalendarEvent>('/calendar/events', payload)
   return response.data
+}
+
+export async function deleteCalendarEvent(
+  eventId: number,
+  payload: { scope?: 'occurrence' | 'series'; delete_remote?: boolean } = {},
+) {
+  await client.request({
+    method: 'delete',
+    url: `/calendar/events/${eventId}`,
+    data: payload,
+  })
 }
 
 export async function updateCalendarEvent(

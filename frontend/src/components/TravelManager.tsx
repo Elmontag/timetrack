@@ -30,6 +30,7 @@ import {
   uploadTravelDocument,
   reorderTravelDocuments,
 } from '../api'
+import { Lightbox } from './Lightbox'
 
 const WORKFLOW_STEPS = [
   { value: 'request_draft', label: 'Dienstreiseantrag' },
@@ -105,45 +106,6 @@ const defaultFormState = (): TravelFormState => ({
   notes: '',
 })
 
-interface LightboxProps {
-  open: boolean
-  title: string
-  onClose: () => void
-  children: ReactNode
-  footer?: ReactNode
-  contentClassName?: string
-}
-
-function Lightbox({ open, title, onClose, children, footer, contentClassName }: LightboxProps) {
-  if (!open) return null
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-8">
-      <div
-        className="w-full max-w-2xl rounded-2xl border border-slate-800 bg-slate-950/90 p-6 shadow-2xl"
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-      >
-        <div className="flex items-start justify-between gap-6">
-          <div>
-            <h3 className="text-lg font-semibold text-slate-100">{title}</h3>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
-          >
-            Schließen
-          </button>
-        </div>
-        <div className={clsx('mt-4 space-y-4 text-sm text-slate-200', contentClassName)}>{children}</div>
-        {footer && <div className="mt-6 flex justify-end gap-3">{footer}</div>}
-      </div>
-    </div>
-  )
-}
-
 export function TravelManager() {
   const [trips, setTrips] = useState<TravelTrip[]>([])
   const [loading, setLoading] = useState(false)
@@ -152,7 +114,7 @@ export function TravelManager() {
   const [formState, setFormState] = useState<TravelFormState>(() => defaultFormState())
   const [formError, setFormError] = useState<string | null>(null)
   const [formSaving, setFormSaving] = useState(false)
-  const [uploadTrip, setUploadTrip] = useState<TravelTrip | null>(null)
+  const [documentsTripId, setDocumentsTripId] = useState<number | null>(null)
   const [uploadDrafts, setUploadDrafts] = useState<UploadDraft[]>([])
   const [uploadError, setUploadError] = useState<string | null>(null)
   const [uploading, setUploading] = useState(false)
@@ -180,6 +142,28 @@ export function TravelManager() {
   const [reorderingTripId, setReorderingTripId] = useState<number | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const draftIdCounter = useRef(0)
+
+  const sortDocuments = useCallback((documents: TravelDocument[]) => {
+    return [...documents].sort((a, b) => {
+      if (a.sort_index !== b.sort_index) {
+        return a.sort_index - b.sort_index
+      }
+      return dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf()
+    })
+  }, [])
+
+  const documentsTrip = useMemo(() => {
+    if (documentsTripId === null) {
+      return null
+    }
+    return trips.find((trip) => trip.id === documentsTripId) ?? null
+  }, [documentsTripId, trips])
+
+  useEffect(() => {
+    if (documentsTripId !== null && !documentsTrip) {
+      setDocumentsTripId(null)
+    }
+  }, [documentsTrip, documentsTripId])
 
   const createDraftFromFile = useCallback(
     (file: File): UploadDraft => {
@@ -295,6 +279,8 @@ export function TravelManager() {
       if (!letterTrip) {
         return
       }
+      const submitter = (event.nativeEvent as SubmitEvent).submitter as HTMLButtonElement | null
+      const action = submitter?.dataset?.action ?? 'save-download'
       setLetterSaving(true)
       setLetterError(null)
       try {
@@ -305,13 +291,15 @@ export function TravelManager() {
         setTrips((prev) =>
           prev.map((trip) =>
             trip.id === letterTrip.id
-              ? { ...trip, documents: [...trip.documents, document] }
+              ? { ...trip, documents: sortDocuments([...trip.documents, document]) }
               : trip,
           ),
         )
         const downloadUrl = travelDocumentDownloadUrl(document.trip_id, document.id)
         closeLetterModal()
-        window.open(downloadUrl, '_blank')
+        if (action === 'save-download') {
+          window.open(downloadUrl, '_blank')
+        }
       } catch (error) {
         console.error(error)
         setLetterError('Anschreiben konnte nicht erstellt werden.')
@@ -319,7 +307,7 @@ export function TravelManager() {
         setLetterSaving(false)
       }
     },
-    [closeLetterModal, letterBody, letterSubject, letterTrip, setTrips],
+    [closeLetterModal, letterBody, letterSubject, letterTrip, setTrips, sortDocuments],
   )
 
   const loadTrips = useCallback(async () => {
@@ -329,12 +317,7 @@ export function TravelManager() {
       const data = await listTravels()
       const normalized = data.map((trip) => ({
         ...trip,
-        documents: [...trip.documents].sort((a, b) => {
-          if (a.sort_index !== b.sort_index) {
-            return a.sort_index - b.sort_index
-          }
-          return dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf()
-        }),
+        documents: sortDocuments(trip.documents),
       }))
       setTrips(normalized)
       setExpandedTrips((prev) => prev.filter((id) => data.some((trip) => trip.id === id)))
@@ -360,7 +343,7 @@ export function TravelManager() {
     } finally {
       setLoading(false)
     }
-  }, [])
+  }, [sortDocuments])
 
   useEffect(() => {
     loadTrips()
@@ -593,9 +576,9 @@ export function TravelManager() {
     }
   }
 
-  const openUploadModal = (trip: TravelTrip) => {
+  const openDocumentsModal = (trip: TravelTrip) => {
     setOpenDatasetMenuId(null)
-    setUploadTrip(trip)
+    setDocumentsTripId(trip.id)
     setUploadDrafts([])
     setUploadError(null)
     if (fileInputRef.current) {
@@ -603,8 +586,8 @@ export function TravelManager() {
     }
   }
 
-  const closeUploadModal = () => {
-    setUploadTrip(null)
+  const closeDocumentsModal = () => {
+    setDocumentsTripId(null)
     setUploadDrafts([])
     setUploadError(null)
     if (fileInputRef.current) {
@@ -614,7 +597,7 @@ export function TravelManager() {
 
   const handleUploadSubmit = async (event: FormEvent) => {
     event.preventDefault()
-    if (!uploadTrip) return
+    if (!documentsTrip) return
     if (uploadDrafts.length === 0) {
       setUploadError('Bitte füge mindestens eine Datei zum Hochladen hinzu.')
       return
@@ -626,14 +609,17 @@ export function TravelManager() {
 
     try {
       for (const draft of uploadDrafts) {
-        await uploadTravelDocument(uploadTrip.id, {
+        await uploadTravelDocument(documentsTrip.id, {
           document_type: draft.document_type,
           comment: draft.comment.trim() || undefined,
           file: draft.file,
         })
       }
       await loadTrips()
-      closeUploadModal()
+      setUploadDrafts([])
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
     } catch (error) {
       console.error('Dokumente konnten nicht hochgeladen werden', error)
       setUploadError('Dokumente konnten nicht hochgeladen werden.')
@@ -843,12 +829,7 @@ export function TravelManager() {
         const updatedTrip = await reorderTravelDocuments(tripId, orderedIds)
         const normalizedTrip = {
           ...updatedTrip,
-          documents: [...updatedTrip.documents].sort((a, b) => {
-            if (a.sort_index !== b.sort_index) {
-              return a.sort_index - b.sort_index
-            }
-            return dayjs(a.created_at).valueOf() - dayjs(b.created_at).valueOf()
-          }),
+          documents: sortDocuments(updatedTrip.documents),
         }
         setTrips((prev) =>
           prev.map((item) => (item.id === tripId ? normalizedTrip : item)),
@@ -861,7 +842,7 @@ export function TravelManager() {
         setReorderingTripId(null)
       }
     },
-    [draggedDocument, loadTrips, trips],
+    [draggedDocument, loadTrips, sortDocuments, trips],
   )
 
   const renderDocumentCard = (
@@ -1053,19 +1034,8 @@ export function TravelManager() {
     )
   }
 
-  const renderTrip = (trip: TravelTrip) => {
-    const isExpanded = expandedTrips.includes(trip.id)
-    const statusIndex = Math.max(
-      0,
-      WORKFLOW_STEPS.findIndex((step) => step.value === trip.workflow_state),
-    )
-    const status = WORKFLOW_STEPS[statusIndex]
-    const previousStep = statusIndex > 0 ? WORKFLOW_STEPS[statusIndex - 1] : null
-    const nextStep =
-      statusIndex < WORKFLOW_STEPS.length - 1 ? WORKFLOW_STEPS[statusIndex + 1] : null
-
-    const isReorderingDocuments = reorderingTripId === trip.id
-    const renderedDocuments: ReactNode[] = []
+  const buildDocumentCards = (trip: TravelTrip) => {
+    const cards: ReactNode[] = []
     const handledIds = new Set<number>()
     for (const document of trip.documents) {
       if (handledIds.has(document.id)) {
@@ -1082,8 +1052,21 @@ export function TravelManager() {
         }
       }
       handledIds.add(document.id)
-      renderedDocuments.push(renderDocumentCard(trip, document, { receipts }))
+      cards.push(renderDocumentCard(trip, document, { receipts }))
     }
+    return cards
+  }
+
+  const renderTrip = (trip: TravelTrip) => {
+    const isExpanded = expandedTrips.includes(trip.id)
+    const statusIndex = Math.max(
+      0,
+      WORKFLOW_STEPS.findIndex((step) => step.value === trip.workflow_state),
+    )
+    const status = WORKFLOW_STEPS[statusIndex]
+    const previousStep = statusIndex > 0 ? WORKFLOW_STEPS[statusIndex - 1] : null
+    const nextStep =
+      statusIndex < WORKFLOW_STEPS.length - 1 ? WORKFLOW_STEPS[statusIndex + 1] : null
 
     return (
       <li
@@ -1207,10 +1190,10 @@ export function TravelManager() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => openUploadModal(trip)}
+                    onClick={() => openDocumentsModal(trip)}
                     className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
                   >
-                    Dokument hochladen
+                    Dokumente ({trip.documents.length})
                   </button>
                   <button
                     type="button"
@@ -1267,19 +1250,6 @@ export function TravelManager() {
               </div>
             </div>
 
-            <div>
-              <h4 className="text-sm font-semibold text-slate-200">Dokumente</h4>
-              {trip.documents.length === 0 ? (
-                <p className="mt-2 text-xs text-slate-500">Keine Dokumente vorhanden.</p>
-              ) : (
-                <div className="relative mt-3 space-y-3">
-                  {isReorderingDocuments && (
-                    <div className="absolute inset-0 cursor-progress rounded-lg border border-slate-800/60 bg-slate-950/40 backdrop-blur-sm" />
-                  )}
-                  {renderedDocuments.map((card) => card)}
-                </div>
-              )}
-            </div>
           </div>
         )}
       </li>
@@ -1538,6 +1508,16 @@ export function TravelManager() {
             <button
               type="submit"
               form="travel-letter"
+              data-action="save-only"
+              disabled={letterSaving || letterLoading}
+              className="inline-flex items-center rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:border-primary hover:text-primary disabled:opacity-50"
+            >
+              Anschreiben speichern
+            </button>
+            <button
+              type="submit"
+              form="travel-letter"
+              data-action="save-download"
               disabled={letterSaving || letterLoading}
               className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 disabled:opacity-50"
             >
@@ -1630,126 +1610,142 @@ export function TravelManager() {
       </Lightbox>
 
       <Lightbox
-        open={Boolean(uploadTrip)}
-        title={uploadTrip ? `Dokument für "${uploadTrip.title}" hochladen` : 'Dokument hochladen'}
-        onClose={closeUploadModal}
+        open={Boolean(documentsTrip)}
+        title={documentsTrip ? `Dokumente für "${documentsTrip.title}"` : 'Dokumente'}
+        onClose={closeDocumentsModal}
+        contentClassName="max-h-[75vh] overflow-y-auto pr-1"
         footer={
-          <>
-            <button
-              type="button"
-              onClick={closeUploadModal}
-              className="rounded-md border border-slate-700 px-3 py-1 text-xs text-slate-200 hover:border-primary hover:text-primary"
-            >
-              Abbrechen
-            </button>
+          documentsTrip && (
             <button
               type="submit"
-              form="travel-upload"
+              form="travel-documents-upload"
               disabled={uploading || uploadDrafts.length === 0}
               className="inline-flex items-center rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground shadow hover:bg-primary/90 disabled:opacity-50"
             >
-              Dokument speichern
+              Dokumente hochladen
             </button>
-          </>
+          )
         }
       >
-        <form id="travel-upload" className="grid gap-4" onSubmit={handleUploadSubmit}>
-          <div
-            onDragOver={handleDragOver}
-            onDrop={handleDropFiles}
-            className={clsx(
-              'flex flex-col items-center justify-center rounded-md border-2 border-dashed border-slate-700 bg-slate-950/50 px-4 py-10 text-center text-sm transition',
-              uploading ? 'opacity-50' : 'hover:border-primary/80 hover:bg-slate-900/60',
-            )}
-          >
-            <p className="font-semibold text-slate-100">Dateien hinzufügen</p>
-            <p className="mt-2 max-w-xs text-xs text-slate-400">
-              Ziehe Dokumente hierher oder
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                className="ml-1 font-semibold text-primary underline-offset-2 hover:underline"
-                disabled={uploading}
-              >
-                Dateien auswählen
-              </button>
-            </p>
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              onChange={handleFileInputChange}
-              className="hidden"
-              disabled={uploading}
-            />
-          </div>
-
-          {uploadDrafts.length > 0 && (
-            <div className="space-y-3">
-              {uploadDrafts.map((draft) => (
-                <div
-                  key={draft.id}
-                  className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 shadow-inner"
-                >
-                  <div className="flex flex-wrap items-start justify-between gap-4">
-                    <div>
-                      <p className="text-sm font-medium text-slate-100">{draft.file.name}</p>
-                      <p className="text-xs text-slate-400">
-                        {(draft.file.size / 1024 / 1024 >= 1
-                          ? `${(draft.file.size / 1024 / 1024).toFixed(1)} MB`
-                          : `${Math.max(1, Math.round(draft.file.size / 1024))} KB`)}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => removeDraft(draft.id)}
-                      className="text-xs font-semibold text-slate-400 hover:text-rose-300"
-                      disabled={uploading}
-                    >
-                      Entfernen
-                    </button>
-                  </div>
-                  <div className="mt-3 grid gap-3 md:grid-cols-2">
-                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Dokumenttyp
-                      <select
-                        value={draft.document_type}
-                        onChange={(event) =>
-                          updateDraft(draft.id, {
-                            document_type: event.target.value as UploadDraft['document_type'],
-                          })
-                        }
-                        className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
-                        disabled={uploading}
-                      >
-                        {DOCUMENT_TYPES.map((type) => (
-                          <option key={type} value={type}>
-                            {type}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Kommentar
-                      <input
-                        type="text"
-                        value={draft.comment}
-                        onChange={(event) =>
-                          updateDraft(draft.id, { comment: event.target.value })
-                        }
-                        placeholder="optional"
-                        className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
-                        disabled={uploading}
-                      />
-                    </label>
-                  </div>
+        {documentsTrip ? (
+          <>
+            <section className="space-y-3">
+              <header>
+                <h4 className="text-sm font-semibold text-slate-200">Bestehende Dokumente</h4>
+                <p className="text-xs text-slate-500">
+                  Ziehe Einträge per Drag & Drop, um die Reihenfolge für Ausdrucke und Pakete anzupassen.
+                </p>
+              </header>
+              {documentsTrip.documents.length === 0 ? (
+                <p className="rounded-lg border border-slate-800/80 bg-slate-950/50 p-4 text-xs text-slate-400">
+                  Keine Dokumente vorhanden.
+                </p>
+              ) : (
+                <div className="relative space-y-3">
+                  {reorderingTripId === documentsTrip.id && (
+                    <div className="absolute inset-0 cursor-progress rounded-lg border border-slate-800/60 bg-slate-950/40 backdrop-blur-sm" />
+                  )}
+                  {buildDocumentCards(documentsTrip)}
                 </div>
-              ))}
-            </div>
-          )}
+              )}
+            </section>
 
-          {uploadError && <p className="text-sm text-rose-300">{uploadError}</p>}
-        </form>
+            <form id="travel-documents-upload" className="grid gap-4" onSubmit={handleUploadSubmit}>
+              <div
+                onDragOver={handleDragOver}
+                onDrop={handleDropFiles}
+                className={clsx(
+                  'flex flex-col items-center justify-center rounded-md border-2 border-dashed border-slate-700 bg-slate-950/50 px-4 py-10 text-center text-sm transition',
+                  uploading ? 'opacity-50' : 'hover:border-primary/80 hover:bg-slate-900/60',
+                )}
+              >
+                <p className="font-semibold text-slate-100">Neue Dateien hinzufügen</p>
+                <p className="mt-2 max-w-xs text-xs text-slate-400">
+                  Ziehe Dokumente hierher oder
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="ml-1 font-semibold text-primary underline-offset-2 hover:underline"
+                    disabled={uploading}
+                  >
+                    Dateien auswählen
+                  </button>
+                </p>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  onChange={handleFileInputChange}
+                  className="hidden"
+                  disabled={uploading}
+                />
+              </div>
+
+              {uploadDrafts.length > 0 && (
+                <div className="space-y-3">
+                  {uploadDrafts.map((draft) => (
+                    <div key={draft.id} className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 shadow-inner">
+                      <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                          <p className="text-sm font-medium text-slate-100">{draft.file.name}</p>
+                          <p className="text-xs text-slate-400">
+                            {draft.file.size / 1024 / 1024 >= 1
+                              ? `${(draft.file.size / 1024 / 1024).toFixed(1)} MB`
+                              : `${Math.max(1, Math.round(draft.file.size / 1024))} KB`}
+                          </p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeDraft(draft.id)}
+                          className="text-xs font-semibold text-slate-400 hover:text-rose-300"
+                          disabled={uploading}
+                        >
+                          Entfernen
+                        </button>
+                      </div>
+                      <div className="mt-3 grid gap-3 md:grid-cols-2">
+                        <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Dokumenttyp
+                          <select
+                            value={draft.document_type}
+                            onChange={(event) =>
+                              updateDraft(draft.id, {
+                                document_type: event.target.value as UploadDraft['document_type'],
+                              })
+                            }
+                            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+                            disabled={uploading}
+                          >
+                            {DOCUMENT_TYPES.map((type) => (
+                              <option key={type} value={type}>
+                                {type}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Kommentar
+                          <input
+                            type="text"
+                            value={draft.comment}
+                            onChange={(event) => updateDraft(draft.id, { comment: event.target.value })}
+                            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950/60 px-3 py-2 text-sm text-slate-100 focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/40"
+                            placeholder="optional"
+                            disabled={uploading}
+                          />
+                        </label>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {uploadError && <p className="text-sm text-rose-300">{uploadError}</p>}
+            </form>
+          </>
+        ) : (
+          <p className="text-sm text-slate-400">Keine Dienstreise ausgewählt.</p>
+        )}
       </Lightbox>
     </div>
   )
