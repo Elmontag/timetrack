@@ -8,10 +8,10 @@ interface Props {
 }
 
 const STATUS_STYLES: Record<string, { label: string; className: string }> = {
-  pending: { label: 'Offen', className: 'text-slate-600 dark:text-slate-400' },
-  attended: { label: 'Teilgenommen', className: 'text-emerald-600 dark:text-emerald-300' },
-  absent: { label: 'Nicht teilgenommen', className: 'text-amber-600 dark:text-amber-300' },
-  cancelled: { label: 'Hinfällig', className: 'text-rose-600 dark:text-rose-300' },
+  pending: { label: 'Offen', className: 'text-slate-400' },
+  attended: { label: 'Teilgenommen', className: 'text-emerald-400' },
+  absent: { label: 'Nicht teilgenommen', className: 'text-amber-300' },
+  cancelled: { label: 'Hinfällig', className: 'text-rose-300' },
 }
 
 export function TodayCalendarList({ day, refreshKey }: Props) {
@@ -327,27 +327,24 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
   )
 
   const renderHoverPreview = () => (
-    <div className="w-72 rounded-2xl border border-slate-200 bg-white/95 p-4 shadow-2xl backdrop-blur-sm dark:border-slate-800 dark:bg-slate-950/95">
+    <div className="w-72 rounded-2xl border border-slate-800 bg-slate-950/95 p-4 shadow-2xl">
       <div className="space-y-3">
-        {loading && <p className="text-sm text-slate-500 dark:text-slate-400">Lade Termine…</p>}
-        {error && !loading && <p className="text-sm text-rose-600 dark:text-rose-300">{error}</p>}
+        {loading && <p className="text-sm text-slate-400">Lade Termine…</p>}
+        {error && !loading && <p className="text-sm text-rose-300">{error}</p>}
         {!loading && events.length === 0 && (
-          <p className="text-sm text-slate-500 dark:text-slate-500">Keine Termine für diesen Tag.</p>
+          <p className="text-sm text-slate-500">Keine Termine für diesen Tag.</p>
         )}
         {!loading &&
           events.map((event) => (
-            <div
-              key={event.id}
-              className="rounded-xl border border-slate-200 bg-slate-50/95 p-3 dark:border-slate-800 dark:bg-slate-900/70"
-            >
-              <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{event.title}</p>
+            <div key={event.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+              <p className="text-sm font-semibold text-slate-100">{event.title}</p>
               <div className="mt-2 flex items-center justify-between text-xs">
-                <span className="font-mono text-slate-600 dark:text-slate-300">
+                <span className="font-mono text-slate-300">
                   {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
                 </span>
                 <span
                   className={
-                    'rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs font-medium dark:border-slate-700 dark:bg-slate-950/70 ' +
+                    'rounded-full bg-slate-950/70 px-2 py-0.5 ' +
                     (STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className)
                   }
                 >
