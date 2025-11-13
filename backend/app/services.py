@@ -54,9 +54,6 @@ else:  # pragma: no cover - only set when caldav is available
 UTC = dt.timezone.utc
 LOCAL_TZ = ZoneInfo(settings.timezone)
 
-CALDAV_SYNC_LOOKBACK_DAYS = 7
-CALDAV_SYNC_LOOKAHEAD_DAYS = 60
-
 
 CALENDAR_EVENT_STATUSES: Set[str] = {"pending", "attended", "absent", "cancelled"}
 
@@ -285,11 +282,6 @@ def sync_caldav_events(
     end_day = end_date or start_day
     range_start, _ = _day_bounds(start_day)
     _, range_end = _day_bounds(end_day)
-
-    if CALDAV_SYNC_LOOKBACK_DAYS:
-        range_start -= dt.timedelta(days=CALDAV_SYNC_LOOKBACK_DAYS)
-    if CALDAV_SYNC_LOOKAHEAD_DAYS:
-        range_end += dt.timedelta(days=CALDAV_SYNC_LOOKAHEAD_DAYS)
 
     try:
         principal = client.principal()

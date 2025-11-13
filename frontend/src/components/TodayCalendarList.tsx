@@ -71,8 +71,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
   }
 
   const requestCancellationScope = (event: CalendarEvent) => {
-    const supportsSeriesScope = event.series_event_count > 1 || Boolean(event.recurrence_id)
-    if (supportsSeriesScope) {
+    if (event.series_event_count > 1) {
       setSeriesDialogEvent(event)
       return
     }
