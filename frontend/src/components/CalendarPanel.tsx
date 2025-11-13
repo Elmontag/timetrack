@@ -68,6 +68,7 @@ export function CalendarPanel({ refreshKey }: Props) {
   const [viewMode, setViewMode] = useState<ViewMode>('month')
   const [pivotDate, setPivotDate] = useState(dayjs().format('YYYY-MM-DD'))
   const [selectedDay, setSelectedDay] = useState(dayjs().format('YYYY-MM-DD'))
+  const [dayDetailsOpen, setDayDetailsOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [caldavDefaultCal, setCaldavDefaultCal] = useState<string | null>(null)
@@ -154,6 +155,13 @@ export function CalendarPanel({ refreshKey }: Props) {
     () => eventsByDate.get(selectedDay) ?? [],
     [eventsByDate, selectedDay],
   )
+  const selectedDayTitle = useMemo(() => {
+    const date = dayjs(selectedDay)
+    if (!date.isValid()) {
+      return 'Termine'
+    }
+    return `Termine am ${date.format('dddd, DD.MM.YYYY')}`
+  }, [selectedDay])
   const pivotMonth = useMemo(() => dayjs(pivotDate), [pivotDate])
   const todayKey = dayjs().format('YYYY-MM-DD')
   const canSyncToCaldav = caldavWritable && Boolean(caldavDefaultCal)
@@ -219,6 +227,23 @@ export function CalendarPanel({ refreshKey }: Props) {
       })
     } else if (layoutMode === 'list') {
       setSelectedDay(pivot.format('YYYY-MM-DD'))
+    }
+  }, [layoutMode, pivotDate])
+
+  const openDayDetails = (dayKey: string) => {
+    setSelectedDay(dayKey)
+    setDayDetailsOpen(true)
+  }
+
+  useEffect(() => {
+    if (layoutMode !== 'month') {
+      setDayDetailsOpen(false)
+    }
+  }, [layoutMode])
+
+  useEffect(() => {
+    if (layoutMode === 'month') {
+      setDayDetailsOpen(false)
     }
   }, [layoutMode, pivotDate])
 
@@ -767,6 +792,48 @@ export function CalendarPanel({ refreshKey }: Props) {
           <p className="text-sm text-slate-300">Kein Termin ausgewählt.</p>
         )}
       </Lightbox>
+      <Lightbox
+        open={layoutMode === 'month' && dayDetailsOpen}
+        onClose={() => setDayDetailsOpen(false)}
+        title={selectedDayTitle}
+        contentClassName="space-y-4"
+      >
+        {selectedDayEvents.length === 0 ? (
+          <p className="text-sm text-slate-400">Keine Termine an diesem Tag.</p>
+        ) : (
+          <ul className="space-y-3">
+            {selectedDayEvents.map((event) => (
+              <li
+                key={event.id}
+                className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-200"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="font-semibold">{event.title}</span>
+                  <span
+                    className={clsx(
+                      'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+                      STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
+                    )}
+                  >
+                    {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
+                  </span>
+                </div>
+                <p className="mt-1 text-xs text-slate-400">
+                  {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
+                </p>
+                <p className="text-[11px] text-slate-500">
+                  {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                    ? `CalDAV: ${event.calendar_identifier}`
+                    : 'Lokal'}
+                </p>
+                {event.location && <p className="text-xs text-slate-400">Ort: {event.location}</p>}
+                {event.description && <p className="mt-1 text-xs text-slate-400">{event.description}</p>}
+                <div className="mt-2">{renderStatusActions(event)}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </Lightbox>
       <div className="mt-6 space-y-4">
         {error && !loading && (
           <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">{error}</p>
@@ -944,7 +1011,7 @@ export function CalendarPanel({ refreshKey }: Props) {
                   <button
                     key={dayKey}
                     type="button"
-                    onClick={() => setSelectedDay(dayKey)}
+                    onClick={() => openDayDetails(dayKey)}
                     className={clsx(
                       'rounded-lg border px-2 py-2 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/40',
                       isCurrentMonth
@@ -960,48 +1027,6 @@ export function CalendarPanel({ refreshKey }: Props) {
                   </button>
                 )
               })}
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-              <h3 className="text-sm font-semibold text-slate-200">
-                {dayjs(selectedDay).isValid()
-                  ? dayjs(selectedDay).format('dddd, DD.MM.YYYY')
-                  : 'Ausgewählter Tag'}
-              </h3>
-              {selectedDayEvents.length === 0 ? (
-                <p className="mt-2 text-xs text-slate-500">Keine Termine an diesem Tag.</p>
-              ) : (
-                <ul className="mt-3 space-y-3">
-                  {selectedDayEvents.map((event) => (
-                    <li
-                      key={event.id}
-                      className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-200"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <span className="font-semibold">{event.title}</span>
-                        <span
-                          className={clsx(
-                            'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
-                            STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
-                          )}
-                        >
-                          {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-xs text-slate-400">
-                        {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
-                      </p>
-                      <p className="text-[11px] text-slate-500">
-                        {event.calendar_identifier && event.calendar_identifier !== 'manual'
-                          ? `CalDAV: ${event.calendar_identifier}`
-                          : 'Lokal'}
-                      </p>
-                      {event.location && <p className="text-xs text-slate-400">Ort: {event.location}</p>}
-                      {event.description && <p className="mt-1 text-xs text-slate-400">{event.description}</p>}
-                      <div className="mt-2">{renderStatusActions(event)}</div>
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
           </div>
         )}
