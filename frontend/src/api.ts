@@ -174,12 +174,16 @@ export interface ActionTokenCreated {
   token: string
 }
 
-export interface Subtrack {
+export interface Task {
   id: number
   day: string
   title: string
   start_time: string | null
   end_time: string | null
+  status: 'planned' | 'active' | 'paused' | 'completed'
+  total_seconds: number
+  paused_duration: number
+  last_pause_start: string | null
   project: string | null
   tags: string[]
   note: string | null
@@ -295,26 +299,26 @@ export async function listCalendarEvents(params: { from_date?: string; to_date?:
   return response.data
 }
 
-export async function listSubtracks(day: string) {
-  const response = await client.get<Subtrack[]>(`/work/subtracks/${day}`)
+export async function listTasks(day: string) {
+  const response = await client.get<Task[]>(`/work/subtracks/${day}`)
   return response.data
 }
 
-export async function createSubtrack(payload: {
+export async function createTask(payload: {
   day: string
   title: string
   start_time?: string
   end_time?: string
-  project?: string
+  project?: string | null
   tags?: string[]
-  note?: string
+  note?: string | null
 }) {
-  const response = await client.post<Subtrack>('/work/subtracks', payload)
+  const response = await client.post<Task>('/work/subtracks', payload)
   return response.data
 }
 
-export async function updateSubtrack(
-  subtrackId: number,
+export async function updateTask(
+  taskId: number,
   payload: {
     day?: string | null
     title?: string | null
@@ -325,12 +329,27 @@ export async function updateSubtrack(
     note?: string | null
   },
 ) {
-  const response = await client.patch<Subtrack>(`/work/subtracks/${subtrackId}`, payload)
+  const response = await client.patch<Task>(`/work/subtracks/${taskId}`, payload)
   return response.data
 }
 
-export async function deleteSubtrack(subtrackId: number) {
-  await client.delete(`/work/subtracks/${subtrackId}`)
+export async function deleteTask(taskId: number) {
+  await client.delete(`/work/subtracks/${taskId}`)
+}
+
+export async function startTaskTimer(taskId: number, payload: { timestamp?: string } = {}) {
+  const response = await client.post<Task>(`/work/subtracks/${taskId}/start`, payload)
+  return response.data
+}
+
+export async function pauseTaskTimer(taskId: number, payload: { timestamp?: string } = {}) {
+  const response = await client.post<Task>(`/work/subtracks/${taskId}/pause`, payload)
+  return response.data
+}
+
+export async function stopTaskTimer(taskId: number, payload: { timestamp?: string } = {}) {
+  const response = await client.post<Task>(`/work/subtracks/${taskId}/stop`, payload)
+  return response.data
 }
 
 export async function createCalendarEvent(payload: {
