@@ -326,6 +326,37 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
     </div>
   )
 
+  const renderHoverPreview = () => (
+    <div className="w-72 rounded-2xl border border-slate-800 bg-slate-950/95 p-4 shadow-2xl">
+      <div className="space-y-3">
+        {loading && <p className="text-sm text-slate-400">Lade Termine…</p>}
+        {error && !loading && <p className="text-sm text-rose-300">{error}</p>}
+        {!loading && events.length === 0 && (
+          <p className="text-sm text-slate-500">Keine Termine für diesen Tag.</p>
+        )}
+        {!loading &&
+          events.map((event) => (
+            <div key={event.id} className="rounded-xl border border-slate-800 bg-slate-900/70 p-3">
+              <p className="text-sm font-semibold text-slate-100">{event.title}</p>
+              <div className="mt-2 flex items-center justify-between text-xs">
+                <span className="font-mono text-slate-300">
+                  {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
+                </span>
+                <span
+                  className={
+                    'rounded-full bg-slate-950/70 px-2 py-0.5 ' +
+                    (STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className)
+                  }
+                >
+                  {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
+                </span>
+              </div>
+            </div>
+          ))}
+      </div>
+    </div>
+  )
+
   if (isCollapsed) {
     return (
       <div className="flex justify-end">
@@ -361,7 +392,7 @@ export function TodayCalendarList({ day, refreshKey }: Props) {
           </div>
           {collapsedHover && (
             <div className="absolute right-0 top-full z-20 mt-3" role="dialog" aria-label="Heutige Termine Vorschau">
-              {renderPanel(true)}
+              {renderHoverPreview()}
             </div>
           )}
         </div>
