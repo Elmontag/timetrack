@@ -130,8 +130,17 @@ def _calendar_series_key(
     return (
         calendar_identifier,
         external_id,
-        f"__start__:{normalized_start.strftime('%Y%m%dT%H%M%SZ')}",
+        _series_start_recurrence_id(normalized_start),
     )
+
+
+def _series_start_recurrence_id(start_time: dt.datetime) -> str:
+    normalized = start_time
+    if normalized.tzinfo is None:
+        normalized = normalized.replace(tzinfo=UTC)
+    else:
+        normalized = normalized.astimezone(UTC)
+    return f"__start__:{normalized.strftime('%Y%m%dT%H%M%SZ')}"
 
 
 def _normalize_note_timestamp(value: Optional[dt.datetime]) -> dt.datetime:
@@ -567,6 +576,8 @@ def sync_caldav_events(
     client = _build_caldav_client(state)
     selected = state.caldav_selected_calendars
     normalized_selected = {value for value in normalize_calendar_selection(selected)}
+    canonical_by_casefold = {value.casefold(): value for value in normalized_selected}
+    selected_casefolds = set(canonical_by_casefold.keys())
     if client is None or not normalized_selected:
         return
 
@@ -587,7 +598,7 @@ def sync_caldav_events(
     existing_query = db.query(CalendarEvent).filter(
         or_(
             CalendarEvent.calendar_identifier.is_(None),
-            CalendarEvent.calendar_identifier.in_(normalized_selected),
+            func.lower(CalendarEvent.calendar_identifier).in_(selected_casefolds),
         )
     )
     existing_records = list(existing_query.all())
@@ -595,10 +606,25 @@ def sync_caldav_events(
     pending_occurrences: List[Dict[str, Any]] = []
     multi_occurrence_counts: Dict[Tuple[Optional[str], str], int] = defaultdict(int)
     stored_occurrence_counts: Dict[Tuple[Optional[str], str], int] = defaultdict(int)
+    explicit_series_keys: Set[Tuple[Optional[str], str]] = set()
+    stored_series_hints: Set[Tuple[Optional[str], str]] = set()
+
+    updated_any = False
 
     for stored in existing_records:
-        if stored.external_id and not (stored.recurrence_id or "").strip():
-            stored_occurrence_counts[(stored.calendar_identifier, stored.external_id)] += 1
+        identifier = stored.calendar_identifier
+        if identifier:
+            canonical_identifier = canonical_by_casefold.get(identifier.casefold())
+            if canonical_identifier and canonical_identifier != identifier:
+                stored.calendar_identifier = canonical_identifier
+                identifier = canonical_identifier
+                updated_any = True
+        if stored.external_id:
+            key_tuple = (identifier, stored.external_id)
+            if (stored.recurrence_id or "").startswith("__start__:"):
+                stored_series_hints.add(key_tuple)
+            if not (stored.recurrence_id or "").strip():
+                stored_occurrence_counts[key_tuple] += 1
 
     for calendar in calendars:
         calendar_id_raw = getattr(calendar, "url", None)
@@ -613,6 +639,10 @@ def sync_caldav_events(
             event_calendar_identifier = calendar_name
         else:
             event_calendar_identifier = calendar_id or calendar_name or "caldav"
+        if event_calendar_identifier:
+            canonical_identifier = canonical_by_casefold.get(event_calendar_identifier.casefold())
+            if canonical_identifier:
+                event_calendar_identifier = canonical_identifier
         try:
             occurrences = _fetch_caldav_occurrences(calendar, range_start, range_end)
         except Exception as exc:  # pragma: no cover - propagate as HTTP error
@@ -641,6 +671,7 @@ def sync_caldav_events(
             description = _ical_to_string(vevent.get("description"))
             external_id = _ical_to_string(vevent.get("uid"))
             recurrence_id = _extract_recurrence_id(vevent)
+            force_series = _has_recurrence_metadata(vevent)
             attendees = _extract_attendees(vevent)
             pending_occurrences.append(
                 {
@@ -652,12 +683,17 @@ def sync_caldav_events(
                     "description": description,
                     "external_id": external_id,
                     "recurrence_id": recurrence_id,
+                    "force_series": force_series,
                     "attendees": attendees,
                 }
             )
 
-            if external_id and not (recurrence_id or "").strip():
-                multi_occurrence_counts[(event_calendar_identifier, external_id)] += 1
+            if external_id:
+                key_tuple = (event_calendar_identifier, external_id)
+                if force_series:
+                    explicit_series_keys.add(key_tuple)
+                if not (recurrence_id or "").strip():
+                    multi_occurrence_counts[key_tuple] += 1
 
     ambiguous_series_keys: Set[Tuple[Optional[str], str]] = {
         key for key, count in multi_occurrence_counts.items() if count > 1
@@ -665,20 +701,27 @@ def sync_caldav_events(
     ambiguous_series_keys.update(
         key for key, count in stored_occurrence_counts.items() if count > 1
     )
+    ambiguous_series_keys.update(explicit_series_keys)
+    ambiguous_series_keys.update(stored_series_hints)
 
     existing_by_uid: Dict[Tuple[Optional[str], str, str], CalendarEvent] = {}
     existing_without_uid: Dict[Tuple[Optional[str], dt.datetime, dt.datetime, str], CalendarEvent] = {}
     duplicates: List[CalendarEvent] = []
 
     for stored in existing_records:
+        identifier = stored.calendar_identifier
+        if stored.external_id and (identifier, stored.external_id) in ambiguous_series_keys and not (stored.recurrence_id or "").strip():
+            synthetic_id = _series_start_recurrence_id(_ensure_utc(stored.start_time))
+            stored.recurrence_id = synthetic_id
+            updated_any = True
         use_start_time = False
         if stored.external_id:
             use_start_time = (
-                stored.calendar_identifier,
+                identifier,
                 stored.external_id,
             ) in ambiguous_series_keys
         series_key = _calendar_series_key(
-            stored.calendar_identifier,
+            identifier,
             stored.external_id,
             stored.recurrence_id,
             stored.start_time,
@@ -715,10 +758,9 @@ def sync_caldav_events(
             continue
         existing_without_uid[key] = stored
 
-    updated = False
     for duplicate in duplicates:
         db.delete(duplicate)
-        updated = True
+        updated_any = True
 
     for occurrence_data in pending_occurrences:
         event_calendar_identifier = occurrence_data["calendar_identifier"]
@@ -729,6 +771,7 @@ def sync_caldav_events(
         description = occurrence_data["description"]
         external_id = occurrence_data["external_id"]
         recurrence_id = occurrence_data["recurrence_id"]
+        force_series = occurrence_data["force_series"]
         attendees = occurrence_data["attendees"]
 
         use_start_time = False
@@ -738,7 +781,9 @@ def sync_caldav_events(
             use_start_time = (
                 event_calendar_identifier,
                 external_id,
-            ) in ambiguous_series_keys
+            ) in ambiguous_series_keys or force_series
+            if use_start_time and not (recurrence_id or "").strip():
+                recurrence_id = _series_start_recurrence_id(start_utc)
             lookup_key = _calendar_series_key(
                 event_calendar_identifier,
                 external_id,
@@ -820,7 +865,7 @@ def sync_caldav_events(
                 existing_without_uid[fallback_key] = existing_event
 
             if changed:
-                updated = True
+                updated_any = True
             continue
 
         event = CalendarEvent(
@@ -854,9 +899,9 @@ def sync_caldav_events(
                 existing_without_uid[fallback_key] = event
         else:
             existing_without_uid[fallback_key] = event
-        updated = True
+        updated_any = True
 
-    if updated:
+    if updated_any:
         db.commit()
 
 
@@ -949,6 +994,41 @@ def _extract_recurrence_id(vevent: Any) -> Optional[str]:
             return None
 
     return None
+
+
+def _has_recurrence_metadata(vevent: Any) -> bool:
+    if vevent is None:
+        return False
+
+    fields = ("rrule", "rdate", "exdate", "exrule")
+    getter = getattr(vevent, "get", None)
+
+    for field in fields:
+        value: Any = None
+        if callable(getter):
+            try:
+                value = getter(field)
+            except Exception:  # pragma: no cover - defensive guard
+                value = None
+        if value is None:
+            value = getattr(vevent, field, None)
+        if value:
+            return True
+
+    property_items = getattr(vevent, "property_items", None)
+    if callable(property_items):
+        try:
+            for name, value in property_items():
+                if not name:
+                    continue
+                normalized = str(name).casefold()
+                normalized = normalized.replace("-", "")
+                if normalized in {"rrule", "rdate", "exdate", "exrule"} and value:
+                    return True
+        except Exception:  # pragma: no cover - defensive guard
+            return False
+
+    return False
 
 
 def _extract_attendees(vevent: Any) -> List[str]:

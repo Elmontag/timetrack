@@ -1,4 +1,5 @@
 import datetime as dt
+import datetime as dt
 from typing import Any
 
 import pytest
@@ -38,6 +39,7 @@ class FakeVEvent:
         attendees: list[Any] | None = None,
         recurrence_id: str | None = None,
         recurrence_field: str = "recurrence_id",
+        rrule: str | None = None,
     ):
         self._data = {
             "summary": summary,
@@ -52,6 +54,8 @@ class FakeVEvent:
             self._data["attendee"] = attendees
         if recurrence_id:
             self._data[recurrence_field] = recurrence_id
+        if rrule:
+            self._data["rrule"] = rrule
         self.name = "VEVENT"
 
     def get(self, key: str):  # pragma: no cover - defensive fallback
@@ -69,6 +73,7 @@ class FakeComponent:
         attendees: list[Any] | None = None,
         recurrence_id: str | None = None,
         recurrence_field: str = "recurrence_id",
+        rrule: str | None = None,
     ):
         self.vevent = FakeVEvent(
             summary,
@@ -78,6 +83,7 @@ class FakeComponent:
             attendees=attendees,
             recurrence_id=recurrence_id,
             recurrence_field=recurrence_field,
+            rrule=rrule,
         )
 
 
@@ -92,6 +98,7 @@ class FakeOccurrence:
         attendees: list[Any] | None = None,
         recurrence_id: str | None = None,
         recurrence_field: str = "recurrence_id",
+        rrule: str | None = None,
     ):
         self.icalendar_component = FakeComponent(
             summary,
@@ -101,6 +108,7 @@ class FakeOccurrence:
             attendees=attendees,
             recurrence_id=recurrence_id,
             recurrence_field=recurrence_field,
+            rrule=rrule,
         )
 
 
@@ -270,6 +278,54 @@ def test_sync_updates_single_event_without_creating_duplicate(monkeypatch, sessi
     assert _naive_utc(stored_events[0].start_time) == expected_start
 
 
+def test_sync_normalizes_calendar_identifier_case(monkeypatch, session):
+    calendar_id_lower = "https://example.com/caldav/calendars/personal"
+    configured_id = "https://example.com/CALDAV/Calendars/Personal"
+
+    existing = CalendarEvent(
+        title="Case Event",
+        start_time=services._ensure_utc(dt.datetime(2024, 2, 1, 8)),
+        end_time=services._ensure_utc(dt.datetime(2024, 2, 1, 9)),
+        location=None,
+        description=None,
+        participated=False,
+        calendar_identifier=calendar_id_lower,
+        external_id="event-case",
+        recurrence_id=None,
+        attendees=[],
+    )
+    session.add(existing)
+    session.commit()
+
+    class CaseCalendar:
+        def __init__(self):
+            self.url = calendar_id_lower
+            self.name = "Personal"
+
+        def date_search(self, *args, **kwargs):
+            start = dt.datetime(2024, 2, 1, 8)
+            return [FakeOccurrence("Case Event", start, start + dt.timedelta(hours=1), uid="event-case")]
+
+    calendar = CaseCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    state = _prepare_state()
+    state.caldav_selected_calendars = [configured_id]
+
+    services.sync_caldav_events(
+        session,
+        state,
+        dt.date(2024, 2, 1),
+        dt.date(2024, 2, 1),
+    )
+
+    stored_events = session.query(CalendarEvent).all()
+    assert len(stored_events) == 1
+    assert stored_events[0].id == existing.id
+    assert stored_events[0].calendar_identifier == configured_id
+
+
 def test_sync_distinguishes_multiple_occurrences_without_recurrence_id(
     monkeypatch, session
 ):
@@ -357,6 +413,74 @@ def test_sync_recognizes_recurrence_id_variants(monkeypatch, session):
         _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 8, 6))),
         _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 9, 6))),
     ]
+
+
+def test_sync_keeps_series_across_separate_runs(monkeypatch, session):
+    class RollingCalendar:
+        def __init__(self):
+            self.url = "https://example.com/caldav/calendars/personal"
+            self.name = "Personal"
+            self._index = 0
+
+        def date_search(self, *args, **kwargs):
+            base = dt.datetime(2024, 1, 10, 9)
+            occurrences = [
+                [
+                    FakeOccurrence(
+                        "Daily Standup",
+                        base,
+                        base + dt.timedelta(minutes=30),
+                        uid="series-rolling",
+                        rrule="FREQ=DAILY;INTERVAL=1",
+                    )
+                ],
+                [
+                    FakeOccurrence(
+                        "Daily Standup",
+                        base + dt.timedelta(days=1),
+                        base + dt.timedelta(days=1, minutes=30),
+                        uid="series-rolling",
+                    )
+                ],
+            ]
+            result = occurrences[min(self._index, len(occurrences) - 1)]
+            self._index += 1
+            return result
+
+    calendar = RollingCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    state = _prepare_state()
+
+    services.sync_caldav_events(
+        session,
+        state,
+        dt.date(2024, 1, 10),
+        dt.date(2024, 1, 10),
+    )
+    services.sync_caldav_events(
+        session,
+        state,
+        dt.date(2024, 1, 11),
+        dt.date(2024, 1, 11),
+    )
+
+    stored_events = (
+        session.query(CalendarEvent)
+        .filter(CalendarEvent.external_id == "series-rolling")
+        .order_by(CalendarEvent.start_time)
+        .all()
+    )
+
+    assert len(stored_events) == 2
+    starts = [_naive_utc(event.start_time) for event in stored_events]
+    assert starts == [
+        _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 10, 9))),
+        _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 11, 9))),
+    ]
+    recurrence_ids = {event.recurrence_id for event in stored_events}
+    assert all(value and value.startswith("__start__:") for value in recurrence_ids)
 
 
 def test_sync_preserves_recurring_instances_outside_current_window(monkeypatch, session):
