@@ -10,6 +10,12 @@ from app.models import CalendarEvent
 from app.state import RuntimeState
 
 
+def _naive_utc(value: dt.datetime) -> dt.datetime:
+    if value.tzinfo is not None:
+        return value.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    return value
+
+
 class FakeAttendee:
     def __init__(self, value: str, cn: str | None = None):
         self._value = value
@@ -196,6 +202,156 @@ def test_sync_accepts_direct_vevent_occurrence(monkeypatch, session):
     assert len(events) == 1
     assert events[0].title == "Planning"
     assert events[0].attendees == ["John Doe", "mailto:jane@example.com"]
+
+
+def test_sync_updates_single_event_without_creating_duplicate(monkeypatch, session):
+    original_local = dt.datetime(2024, 1, 5, 9)
+    original_start = services._ensure_utc(original_local)
+    calendar_id = "https://example.com/caldav/calendars/personal"
+    existing = CalendarEvent(
+        title="Weekly Sync",
+        start_time=original_start,
+        end_time=original_start + dt.timedelta(hours=1),
+        location=None,
+        description=None,
+        participated=False,
+        calendar_identifier=calendar_id,
+        external_id="event-123",
+        recurrence_id=None,
+        attendees=[],
+    )
+    session.add(existing)
+    session.commit()
+
+    class UpdateCalendar:
+        def __init__(self):
+            self.url = calendar_id
+            self.name = "Personal"
+
+        def date_search(self, *args, **kwargs):
+            new_start = dt.datetime(2024, 1, 5, 10)
+            new_end = new_start + dt.timedelta(hours=1)
+            return [FakeOccurrence("Weekly Sync", new_start, new_end, uid="event-123")]
+
+    calendar = UpdateCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    state = _prepare_state()
+    services.sync_caldav_events(
+        session, state, dt.date(2024, 1, 5), dt.date(2024, 1, 5)
+    )
+
+    stored_events = session.query(CalendarEvent).order_by(CalendarEvent.start_time).all()
+    assert len(stored_events) == 1
+    assert stored_events[0].id == existing.id
+    expected_start = _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 5, 10)))
+    assert _naive_utc(stored_events[0].start_time) == expected_start
+
+
+def test_sync_distinguishes_multiple_occurrences_without_recurrence_id(
+    monkeypatch, session
+):
+    class MultiCalendar:
+        def __init__(self):
+            self.url = "https://example.com/caldav/calendars/personal"
+            self.name = "Personal"
+
+        def date_search(self, *args, **kwargs):
+            first_start = dt.datetime(2024, 1, 6, 8)
+            second_start = first_start + dt.timedelta(days=1)
+            return [
+                FakeOccurrence("Training", first_start, first_start + dt.timedelta(hours=2), uid="series-456"),
+                FakeOccurrence("Training", second_start, second_start + dt.timedelta(hours=2), uid="series-456"),
+            ]
+
+    calendar = MultiCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    state = _prepare_state()
+    services.sync_caldav_events(
+        session, state, dt.date(2024, 1, 6), dt.date(2024, 1, 7)
+    )
+
+    stored_events = (
+        session.query(CalendarEvent)
+        .order_by(CalendarEvent.start_time)
+        .filter(CalendarEvent.external_id == "series-456")
+        .all()
+    )
+    assert len(stored_events) == 2
+    first_expected = _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 6, 8)))
+    second_expected = _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 7, 8)))
+    assert _naive_utc(stored_events[0].start_time) == first_expected
+    assert _naive_utc(stored_events[1].start_time) == second_expected
+
+
+def test_sync_preserves_recurring_instances_outside_current_window(monkeypatch, session):
+    class WindowedCalendar:
+        def __init__(self):
+            self.url = "https://example.com/caldav/calendars/personal"
+            self.name = "Personal"
+            self._starts = [
+                dt.datetime(2024, 1, 6, 8),
+                dt.datetime(2024, 1, 7, 8),
+            ]
+
+        def date_search(self, start, end, expand=True):
+            def _normalize(value: dt.datetime) -> dt.datetime:
+                if value.tzinfo is None:
+                    return value
+                return value.astimezone(dt.timezone.utc).replace(tzinfo=None)
+
+            start_naive = _normalize(start)
+            end_naive = _normalize(end)
+            occurrences: list[FakeOccurrence] = []
+            for start_time in self._starts:
+                if start_naive <= start_time <= end_naive:
+                    occurrences.append(
+                        FakeOccurrence(
+                            "Training",
+                            start_time,
+                            start_time + dt.timedelta(hours=2),
+                            uid="series-789",
+                        )
+                    )
+            return occurrences
+
+    calendar = WindowedCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    state = _prepare_state()
+
+    services.sync_caldav_events(
+        session, state, dt.date(2024, 1, 6), dt.date(2024, 1, 7)
+    )
+
+    initial_events = (
+        session.query(CalendarEvent)
+        .filter(CalendarEvent.external_id == "series-789")
+        .order_by(CalendarEvent.start_time)
+        .all()
+    )
+    assert len(initial_events) == 2
+
+    services.sync_caldav_events(
+        session, state, dt.date(2024, 1, 6), dt.date(2024, 1, 6)
+    )
+
+    stored_events = (
+        session.query(CalendarEvent)
+        .filter(CalendarEvent.external_id == "series-789")
+        .order_by(CalendarEvent.start_time)
+        .all()
+    )
+    assert len(stored_events) == 2
+    assert [
+        _naive_utc(event.start_time) for event in stored_events
+    ] == [
+        _naive_utc(event.start_time) for event in initial_events
+    ]
 
 
 def test_sync_raises_http_error_when_all_attempts_fail(monkeypatch, session):
