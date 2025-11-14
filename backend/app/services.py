@@ -521,6 +521,34 @@ def _coerce_ical_datetime(value: Any) -> Optional[dt.datetime]:
     return None
 
 
+def _iter_rrule_values(value: Any) -> Iterable[Any]:
+    if not value:
+        return []
+    if isinstance(value, list):
+        return [entry for entry in value if entry]
+    return [value]
+
+
+def _iter_date_values(value: Any) -> Iterable[dt.datetime]:
+    if not value:
+        return []
+    if not isinstance(value, list):
+        candidates = [value]
+    else:
+        candidates = [entry for entry in value if entry]
+    for candidate in candidates:
+        dts = getattr(candidate, "dts", None)
+        if dts:
+            for item in dts:
+                normalized = _coerce_ical_datetime(getattr(item, "dt", item))
+                if normalized is not None:
+                    yield normalized
+            continue
+        normalized = _coerce_ical_datetime(candidate)
+        if normalized is not None:
+            yield normalized
+
+
 def fetch_caldav_calendars(state: RuntimeState) -> List[Dict[str, str]]:
     client = _build_caldav_client(state, strict=True)
     try:
@@ -618,6 +646,7 @@ def sync_caldav_events(
     pending_occurrences: List[Dict[str, Any]] = []
     multi_occurrence_counts: Dict[Tuple[Optional[str], str], int] = defaultdict(int)
     stored_occurrence_counts: Dict[Tuple[Optional[str], str], int] = defaultdict(int)
+    recurring_without_ids: Set[Tuple[Optional[str], str]] = set()
     updated = False
 
     for stored in existing_records:
@@ -683,6 +712,7 @@ def sync_caldav_events(
                             "external_id": external_id,
                             "recurrence_id": recurrence_id,
                             "attendees": attendees,
+                            "is_recurring": True,
                         }
                     )
                 continue
@@ -699,6 +729,7 @@ def sync_caldav_events(
                 continue
             recurrence_raw = _extract_recurrence_identifier(vevent)
             recurrence_id = _normalize_recurrence_value(recurrence_raw)
+            is_recurring = bool(recurrence_id) or _vevent_is_recurring(vevent)
             pending_occurrences.append(
                 {
                     "calendar_identifier": event_calendar_identifier,
@@ -710,11 +741,14 @@ def sync_caldav_events(
                     "external_id": external_id,
                     "recurrence_id": recurrence_id,
                     "attendees": attendees,
+                    "is_recurring": is_recurring,
                 }
             )
 
             if external_id and not (recurrence_id or "").strip():
                 multi_occurrence_counts[(event_calendar_identifier, external_id)] += 1
+                if is_recurring:
+                    recurring_without_ids.add((event_calendar_identifier, external_id))
 
     ambiguous_series_keys: Set[Tuple[Optional[str], str]] = {
         key for key, count in multi_occurrence_counts.items() if count > 1
@@ -722,6 +756,7 @@ def sync_caldav_events(
     ambiguous_series_keys.update(
         key for key, count in stored_occurrence_counts.items() if count > 1
     )
+    ambiguous_series_keys.update(recurring_without_ids)
 
     existing_by_uid: Dict[Tuple[Optional[str], str, str], CalendarEvent] = {}
     existing_without_uid: Dict[
@@ -1113,6 +1148,30 @@ def _extract_recurrence_identifier(vevent: Any) -> Optional[str]:
     return None
 
 
+def _vevent_is_recurring(vevent: Any) -> bool:
+    getter = getattr(vevent, "get", None)
+    if not callable(getter):
+        return False
+
+    try:
+        rrule_values = getter("rrule")
+    except Exception:  # pragma: no cover - defensive guard
+        rrule_values = None
+    for value in _iter_rrule_values(rrule_values):
+        if _ical_to_string(value):
+            return True
+
+    for key in ("rdate", "exdate"):
+        try:
+            candidate = getter(key)
+        except Exception:  # pragma: no cover - defensive guard
+            continue
+        for _ in _iter_date_values(candidate):
+            return True
+
+    return _extract_recurrence_identifier(vevent) is not None
+
+
 def _expand_vevent_occurrences(
     vevent: Any,
     range_start: dt.datetime,
@@ -1138,32 +1197,6 @@ def _expand_vevent_occurrences(
         duration = dtend - dtstart
         if duration <= dt.timedelta(0):
             duration = dt.timedelta(minutes=1)
-
-    def _iter_rrule_values(value: Any) -> Iterable[Any]:
-        if not value:
-            return []
-        if isinstance(value, list):
-            return [entry for entry in value if entry]
-        return [value]
-
-    def _iter_date_values(value: Any) -> Iterable[dt.datetime]:
-        if not value:
-            return []
-        if not isinstance(value, list):
-            candidates = [value]
-        else:
-            candidates = value
-        for candidate in candidates:
-            dts = getattr(candidate, "dts", None)
-            if dts:
-                for item in dts:
-                    normalized = _coerce_ical_datetime(getattr(item, "dt", item))
-                    if normalized is not None:
-                        yield normalized
-                continue
-            normalized = _coerce_ical_datetime(candidate)
-            if normalized is not None:
-                yield normalized
 
     rule_set = rruleset()
     has_recurrence_information = False

@@ -544,6 +544,64 @@ def test_sync_deduplicates_by_uid(monkeypatch, session):
     assert session.query(CalendarEvent).count() == 1
 
 
+def test_sync_tracks_recurring_series_without_recurrence_ids(monkeypatch, session):
+    class WrappedOccurrence:
+        def __init__(self, component):
+            self.icalendar_component = component
+
+    class SequentialCalendar:
+        def __init__(self):
+            self.url = "https://example.com/caldav/calendars/personal"
+            self.name = "Personal"
+            self.events: list[Event] = []
+            start = dt.datetime(2024, 1, 1, 9, tzinfo=dt.timezone.utc)
+            for offset in range(3):
+                event = Event()
+                event.add("summary", "Daily Sync")
+                event.add("dtstart", start + dt.timedelta(days=offset))
+                event.add("dtend", start + dt.timedelta(days=offset, minutes=30))
+                event.add("uid", "series-uid")
+                event.add("rrule", {"freq": ["daily"]})
+                self.events.append(event)
+
+        def date_search(self, start, end, expand=True):
+            results: list[WrappedOccurrence] = []
+            for event in self.events:
+                dtstart = event.get("dtstart").dt
+                if start <= dtstart <= end:
+                    results.append(WrappedOccurrence(event))
+            return results
+
+    calendar = SequentialCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+    monkeypatch.setattr(services, "_expand_vevent_occurrences", lambda vevent, start, end: [])
+
+    state = _prepare_state()
+
+    for day in range(1, 4):
+        services.sync_caldav_events(
+            session, state, dt.date(2024, 1, day), dt.date(2024, 1, day)
+        )
+
+    stored_events = (
+        session.query(CalendarEvent)
+        .filter(CalendarEvent.external_id == "series-uid")
+        .order_by(CalendarEvent.start_time)
+        .all()
+    )
+
+    assert len(stored_events) == 3
+    expected_starts = [
+        services._ensure_utc(dt.datetime(2024, 1, 1, 9, tzinfo=dt.timezone.utc)),
+        services._ensure_utc(dt.datetime(2024, 1, 2, 9, tzinfo=dt.timezone.utc)),
+        services._ensure_utc(dt.datetime(2024, 1, 3, 9, tzinfo=dt.timezone.utc)),
+    ]
+    assert [
+        _naive_utc(event.start_time) for event in stored_events
+    ] == [_naive_utc(start) for start in expected_starts]
+
+
 def test_sync_reuses_existing_event_when_calendar_identifier_case_differs(
     monkeypatch, session
 ):
