@@ -53,9 +53,9 @@ const VIEW_OPTIONS: { key: ViewMode; label: string }[] = [
 ]
 
 const LAYOUT_OPTIONS: { key: LayoutMode; label: string }[] = [
-  { key: 'list', label: 'Liste' },
-  { key: 'week', label: 'Wochenansicht' },
   { key: 'month', label: 'Monatsansicht' },
+  { key: 'week', label: 'Wochenansicht' },
+  { key: 'list', label: 'Liste' },
 ]
 
 export function CalendarPanel({ refreshKey }: Props) {
@@ -64,10 +64,11 @@ export function CalendarPanel({ refreshKey }: Props) {
     from: dayjs().startOf('month').format('YYYY-MM-DD'),
     to: dayjs().endOf('month').format('YYYY-MM-DD'),
   })
-  const [layoutMode, setLayoutMode] = useState<LayoutMode>('list')
+  const [layoutMode, setLayoutMode] = useState<LayoutMode>('month')
   const [viewMode, setViewMode] = useState<ViewMode>('month')
   const [pivotDate, setPivotDate] = useState(dayjs().format('YYYY-MM-DD'))
   const [selectedDay, setSelectedDay] = useState(dayjs().format('YYYY-MM-DD'))
+  const [dayDetailsOpen, setDayDetailsOpen] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [caldavDefaultCal, setCaldavDefaultCal] = useState<string | null>(null)
@@ -89,6 +90,7 @@ export function CalendarPanel({ refreshKey }: Props) {
   const [formError, setFormError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
   const [expandedRows, setExpandedRows] = useState<number[]>([])
+  const [expandedDayEventIds, setExpandedDayEventIds] = useState<number[]>([])
   const [participationUpdating, setParticipationUpdating] = useState<number | null>(null)
   const seriesCounts = useMemo(() => {
     const map = new Map<string, number>()
@@ -154,6 +156,13 @@ export function CalendarPanel({ refreshKey }: Props) {
     () => eventsByDate.get(selectedDay) ?? [],
     [eventsByDate, selectedDay],
   )
+  const selectedDayTitle = useMemo(() => {
+    const date = dayjs(selectedDay)
+    if (!date.isValid()) {
+      return 'Termine'
+    }
+    return `Termine am ${date.format('dddd, DD.MM.YYYY')}`
+  }, [selectedDay])
   const pivotMonth = useMemo(() => dayjs(pivotDate), [pivotDate])
   const todayKey = dayjs().format('YYYY-MM-DD')
   const canSyncToCaldav = caldavWritable && Boolean(caldavDefaultCal)
@@ -161,6 +170,16 @@ export function CalendarPanel({ refreshKey }: Props) {
     () => `${dayjs(range.from).format('DD.MM.YYYY')} – ${dayjs(range.to).format('DD.MM.YYYY')}`,
     [range.from, range.to],
   )
+
+  useEffect(() => {
+    if (!dayDetailsOpen) {
+      setExpandedDayEventIds([])
+    }
+  }, [dayDetailsOpen])
+
+  useEffect(() => {
+    setExpandedDayEventIds([])
+  }, [selectedDay])
 
   useEffect(() => {
     const pivot = dayjs(pivotDate)
@@ -219,6 +238,23 @@ export function CalendarPanel({ refreshKey }: Props) {
       })
     } else if (layoutMode === 'list') {
       setSelectedDay(pivot.format('YYYY-MM-DD'))
+    }
+  }, [layoutMode, pivotDate])
+
+  const openDayDetails = (dayKey: string) => {
+    setSelectedDay(dayKey)
+    setDayDetailsOpen(true)
+  }
+
+  useEffect(() => {
+    if (layoutMode !== 'month') {
+      setDayDetailsOpen(false)
+    }
+  }, [layoutMode])
+
+  useEffect(() => {
+    if (layoutMode === 'month') {
+      setDayDetailsOpen(false)
     }
   }, [layoutMode, pivotDate])
 
@@ -353,8 +389,15 @@ export function CalendarPanel({ refreshKey }: Props) {
     )
   }
 
+  const toggleDayEventDetails = (eventId: number) => {
+    setExpandedDayEventIds((prev) =>
+      prev.includes(eventId) ? prev.filter((id) => id !== eventId) : [...prev, eventId],
+    )
+  }
+
   const openDeleteDialog = useCallback(
     (event: CalendarEvent) => {
+      setDayDetailsOpen(false)
       const seriesKey = event.external_id
         ? `${event.calendar_identifier ?? 'manual'}::${event.external_id}`
         : null
@@ -767,6 +810,72 @@ export function CalendarPanel({ refreshKey }: Props) {
           <p className="text-sm text-slate-300">Kein Termin ausgewählt.</p>
         )}
       </Lightbox>
+      <Lightbox
+        open={layoutMode === 'month' && dayDetailsOpen}
+        onClose={() => setDayDetailsOpen(false)}
+        title={selectedDayTitle}
+        contentClassName="space-y-4"
+      >
+        {selectedDayEvents.length === 0 ? (
+          <p className="text-sm text-slate-400">Keine Termine an diesem Tag.</p>
+        ) : (
+          <ul className="space-y-3">
+            {selectedDayEvents.map((event) => {
+              const isExpanded = expandedDayEventIds.includes(event.id)
+              return (
+                <li
+                  key={event.id}
+                  className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-200"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <p className="font-semibold text-slate-100">{event.title}</p>
+                      <p className="mt-1 text-xs text-slate-400">
+                        {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
+                        {event.calendar_identifier && event.calendar_identifier !== 'manual'
+                          ? `CalDAV: ${event.calendar_identifier}`
+                          : 'Lokal'}
+                      </p>
+                      {event.location && <p className="text-xs text-slate-400">Ort: {event.location}</p>}
+                    </div>
+                    <div className="flex flex-col items-end gap-2">
+                      <span
+                        className={clsx(
+                          'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
+                          STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
+                        )}
+                      >
+                        {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => toggleDayEventDetails(event.id)}
+                        className="rounded-md border border-slate-800 px-2 py-1 text-[11px] text-slate-300 hover:border-primary hover:text-primary"
+                        aria-expanded={isExpanded}
+                      >
+                        {isExpanded ? 'Weniger' : 'Details'}
+                      </button>
+                    </div>
+                  </div>
+                  {isExpanded && (
+                    <div className="mt-3 space-y-2 border-t border-slate-800 pt-3">
+                      {event.description ? (
+                        <p className="whitespace-pre-wrap text-xs text-slate-300">{event.description}</p>
+                      ) : (
+                        <p className="text-xs italic text-slate-500">Keine Beschreibung vorhanden.</p>
+                      )}
+                    </div>
+                  )}
+                  <div className="mt-3">{renderStatusActions(event)}</div>
+                </li>
+              )
+            })}
+          </ul>
+        )}
+      </Lightbox>
+
       <div className="mt-6 space-y-4">
         {error && !loading && (
           <p className="rounded-md border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm text-rose-300">{error}</p>
@@ -817,32 +926,30 @@ export function CalendarPanel({ refreshKey }: Props) {
                               {renderStatusActions(event)}
                             </div>
                           </td>
-                          <td className="px-4 py-2">
+                          <td className="px-4 py-2 text-slate-300">
                             <button
                               type="button"
                               onClick={() => toggleDetails(event.id)}
-                              className="text-xs text-primary hover:underline"
+                              className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:border-primary hover:text-primary"
+                              aria-expanded={isExpanded}
                             >
-                              {isExpanded ? 'Details verbergen' : 'Details anzeigen'}
+                              {isExpanded ? 'Weniger' : 'Details'}
                             </button>
                           </td>
                         </tr>
                         {isExpanded && (
-                          <tr key={`${event.id}-details`} className="bg-slate-900/50">
+                          <tr className="bg-slate-950/40">
                             <td colSpan={4} className="px-4 py-3 text-sm text-slate-200">
                               <div className="space-y-3">
-                                {event.description && (
+                                {event.description ? (
                                   <div>
                                     <p className="text-xs uppercase tracking-wide text-slate-500">Beschreibung</p>
-                                    <p className="text-slate-300">{event.description}</p>
+                                    <p className="mt-1 whitespace-pre-wrap text-slate-300">{event.description}</p>
                                   </div>
-                                )}
-                                {event.location && (
-                                  <div>
-                                    <p className="text-xs uppercase tracking-wide text-slate-500">Ort</p>
-                                    <p className="text-slate-300">{event.location}</p>
-                                  </div>
-                                )}
+                                ) : null}
+                                {event.location ? (
+                                  <p className="text-xs text-slate-400">Ort: {event.location}</p>
+                                ) : null}
                                 {event.attendees.length > 0 && (
                                   <div>
                                     <p className="text-xs uppercase tracking-wide text-slate-500">Teilnehmer</p>
@@ -944,7 +1051,7 @@ export function CalendarPanel({ refreshKey }: Props) {
                   <button
                     key={dayKey}
                     type="button"
-                    onClick={() => setSelectedDay(dayKey)}
+                    onClick={() => openDayDetails(dayKey)}
                     className={clsx(
                       'rounded-lg border px-2 py-2 text-left transition focus:outline-none focus:ring-2 focus:ring-primary/40',
                       isCurrentMonth
@@ -960,48 +1067,6 @@ export function CalendarPanel({ refreshKey }: Props) {
                   </button>
                 )
               })}
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-slate-950/60 p-4">
-              <h3 className="text-sm font-semibold text-slate-200">
-                {dayjs(selectedDay).isValid()
-                  ? dayjs(selectedDay).format('dddd, DD.MM.YYYY')
-                  : 'Ausgewählter Tag'}
-              </h3>
-              {selectedDayEvents.length === 0 ? (
-                <p className="mt-2 text-xs text-slate-500">Keine Termine an diesem Tag.</p>
-              ) : (
-                <ul className="mt-3 space-y-3">
-                  {selectedDayEvents.map((event) => (
-                    <li
-                      key={event.id}
-                      className="rounded-lg border border-slate-800 bg-slate-950/50 p-3 text-sm text-slate-200"
-                    >
-                      <div className="flex flex-wrap items-center justify-between gap-3">
-                        <span className="font-semibold">{event.title}</span>
-                        <span
-                          className={clsx(
-                            'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium',
-                            STATUS_STYLES[event.status]?.className ?? STATUS_STYLES.pending.className,
-                          )}
-                        >
-                          {STATUS_STYLES[event.status]?.label ?? STATUS_STYLES.pending.label}
-                        </span>
-                      </div>
-                      <p className="mt-1 text-xs text-slate-400">
-                        {dayjs(event.start_time).format('HH:mm')} – {dayjs(event.end_time).format('HH:mm')}
-                      </p>
-                      <p className="text-[11px] text-slate-500">
-                        {event.calendar_identifier && event.calendar_identifier !== 'manual'
-                          ? `CalDAV: ${event.calendar_identifier}`
-                          : 'Lokal'}
-                      </p>
-                      {event.location && <p className="text-xs text-slate-400">Ort: {event.location}</p>}
-                      {event.description && <p className="mt-1 text-xs text-slate-400">{event.description}</p>}
-                      <div className="mt-2">{renderStatusActions(event)}</div>
-                    </li>
-                  ))}
-                </ul>
-              )}
             </div>
           </div>
         )}

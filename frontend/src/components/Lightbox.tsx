@@ -14,9 +14,10 @@ export function Lightbox({ open, title, onClose, children, footer, contentClassN
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4 py-8">
+    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
       <div
-        className="w-full max-w-2xl rounded-2xl border border-slate-800 bg-slate-950/90 p-6 shadow-2xl"
+        className="flex w-full max-w-2xl flex-col rounded-2xl border border-slate-800 bg-slate-950/90 p-6 shadow-2xl"
+        style={{ maxHeight: 'min(36rem, calc(100vh - 4rem))' }}
         role="dialog"
         aria-modal="true"
         aria-label={title}
@@ -33,7 +34,7 @@ export function Lightbox({ open, title, onClose, children, footer, contentClassN
             Schließen
           </button>
         </div>
-        <div className={clsx('mt-4 space-y-4 text-sm text-slate-200', contentClassName)}>{children}</div>
+        <div className={clsx('mt-4 flex-1 space-y-4 overflow-y-auto text-sm text-slate-200', contentClassName)}>{children}</div>
         {footer && <div className="mt-6 flex justify-end gap-3">{footer}</div>}
       </div>
     </div>
