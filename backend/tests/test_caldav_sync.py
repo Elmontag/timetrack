@@ -3,6 +3,7 @@ from typing import Any
 
 import pytest
 from fastapi import HTTPException, status
+from icalendar import Event
 
 from app import services
 from app.config import settings
@@ -141,6 +142,15 @@ class StandaloneOccurrence:
         self.icalendar_component = StandaloneVEvent(summary, start, end, attendees=attendees)
 
 
+class RecurringMasterOccurrence:
+    def __init__(self, vevent: Event):
+        class Wrapper:
+            def __init__(self, event: Event):
+                self.vevent = event
+
+        self.icalendar_component = Wrapper(vevent)
+
+
 class FakePrincipal:
     def __init__(self, calendars):
         self._calendars = calendars
@@ -271,6 +281,53 @@ def test_sync_updates_single_event_without_creating_duplicate(monkeypatch, sessi
     assert _naive_utc(stored_events[0].start_time) == expected_start
 
 
+def test_sync_updates_event_without_uid_when_summary_changes(monkeypatch, session):
+    state = _prepare_state()
+    calendar_id = state.caldav_selected_calendars[0]
+    original_start = dt.datetime(2024, 1, 8, 12, tzinfo=dt.timezone.utc)
+    existing = CalendarEvent(
+        title="Lunch",
+        start_time=original_start,
+        end_time=original_start + dt.timedelta(hours=1),
+        location=None,
+        description=None,
+        participated=False,
+        calendar_identifier=calendar_id,
+        external_id=None,
+        recurrence_id=None,
+        attendees=[],
+    )
+    session.add(existing)
+    session.commit()
+
+    class UpdatedCalendar:
+        def __init__(self):
+            self.url = calendar_id
+            self.name = "Personal"
+
+        def date_search(self, *args, **kwargs):
+            return [
+                FakeOccurrence(
+                    "Team Lunch",
+                    original_start,
+                    original_start + dt.timedelta(hours=1),
+                )
+            ]
+
+    calendar = UpdatedCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    services.sync_caldav_events(
+        session, state, original_start.date(), original_start.date()
+    )
+
+    stored_events = session.query(CalendarEvent).order_by(CalendarEvent.start_time).all()
+    assert len(stored_events) == 1
+    assert stored_events[0].id == existing.id
+    assert stored_events[0].title == "Team Lunch"
+
+
 def test_sync_distinguishes_multiple_occurrences_without_recurrence_id(
     monkeypatch, session
 ):
@@ -374,6 +431,55 @@ def test_sync_preserves_recurring_instances_outside_current_window(monkeypatch, 
     ] == [
         _naive_utc(event.start_time) for event in initial_events
     ]
+
+
+def test_sync_expands_master_event_when_server_does_not_expand(monkeypatch, session):
+    class NonExpandingCalendar:
+        def __init__(self):
+            self.url = "https://example.com/caldav/calendars/personal"
+            self.name = "Personal"
+            self.event = Event()
+            start = dt.datetime(2024, 1, 1, 9, tzinfo=dt.timezone.utc)
+            self.event.add("summary", "Daily Standup")
+            self.event.add("dtstart", start)
+            self.event.add("dtend", start + dt.timedelta(minutes=30))
+            self.event.add("uid", "daily-standup")
+            self.event.add("rrule", {"freq": ["daily"], "count": [5]})
+
+        def date_search(self, *args, **kwargs):
+            return [RecurringMasterOccurrence(self.event)]
+
+    calendar = NonExpandingCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    state = _prepare_state()
+
+    services.sync_caldav_events(
+        session, state, dt.date(2024, 1, 3), dt.date(2024, 1, 5)
+    )
+
+    stored_events = (
+        session.query(CalendarEvent)
+        .filter(CalendarEvent.external_id == "daily-standup")
+        .order_by(CalendarEvent.start_time)
+        .all()
+    )
+
+    assert len(stored_events) == 3
+    expected_starts = [
+        dt.datetime(2024, 1, 3, 9, tzinfo=dt.timezone.utc),
+        dt.datetime(2024, 1, 4, 9, tzinfo=dt.timezone.utc),
+        dt.datetime(2024, 1, 5, 9, tzinfo=dt.timezone.utc),
+    ]
+    assert [
+        _naive_utc(event.start_time) for event in stored_events
+    ] == [
+        _naive_utc(start) for start in expected_starts
+    ]
+    recurrence_ids = {event.recurrence_id for event in stored_events}
+    assert len(recurrence_ids) == 3
+    assert all(rec_id for rec_id in recurrence_ids)
 
 
 def test_sync_raises_http_error_when_all_attempts_fail(monkeypatch, session):
