@@ -112,7 +112,7 @@ def _calendar_series_key(
     if not external_id:
         return None
 
-    normalized_recurrence = (recurrence_id or "").strip()
+    normalized_recurrence = _normalize_recurrence_value(recurrence_id)
     if normalized_recurrence:
         return (calendar_identifier, external_id, normalized_recurrence)
 
@@ -566,9 +566,30 @@ def sync_caldav_events(
 ) -> None:
     client = _build_caldav_client(state)
     selected = state.caldav_selected_calendars
-    normalized_selected = {value for value in normalize_calendar_selection(selected)}
-    if client is None or not normalized_selected:
+    normalized_selection = normalize_calendar_selection(selected)
+    selection_by_casefold: Dict[str, str] = {}
+    for value in normalized_selection:
+        casefolded = value.casefold()
+        if casefolded not in selection_by_casefold:
+            selection_by_casefold[casefolded] = value
+    if client is None or not selection_by_casefold:
         return
+
+    selected_casefolds = set(selection_by_casefold.keys())
+
+    def _resolve_identifier(*candidates: Optional[str]) -> Optional[str]:
+        for candidate in candidates:
+            normalized_candidate = normalize_calendar_identifier(candidate)
+            if not normalized_candidate:
+                continue
+            canonical = selection_by_casefold.get(normalized_candidate.casefold())
+            if canonical:
+                return canonical
+        for candidate in candidates:
+            normalized_candidate = normalize_calendar_identifier(candidate)
+            if normalized_candidate:
+                return normalized_candidate
+        return None
 
     start_day = start_date or dt.date.today()
     end_day = end_date or start_day
@@ -587,7 +608,8 @@ def sync_caldav_events(
     existing_query = db.query(CalendarEvent).filter(
         or_(
             CalendarEvent.calendar_identifier.is_(None),
-            CalendarEvent.calendar_identifier.in_(normalized_selected),
+            CalendarEvent.calendar_identifier.in_(list(selection_by_casefold.values())),
+            func.lower(CalendarEvent.calendar_identifier).in_(selected_casefolds),
         )
     )
     existing_records = list(existing_query.all())
@@ -595,10 +617,19 @@ def sync_caldav_events(
     pending_occurrences: List[Dict[str, Any]] = []
     multi_occurrence_counts: Dict[Tuple[Optional[str], str], int] = defaultdict(int)
     stored_occurrence_counts: Dict[Tuple[Optional[str], str], int] = defaultdict(int)
+    updated = False
 
     for stored in existing_records:
-        if stored.external_id and not (stored.recurrence_id or "").strip():
-            stored_occurrence_counts[(stored.calendar_identifier, stored.external_id)] += 1
+        resolved_identifier = _resolve_identifier(stored.calendar_identifier)
+        if resolved_identifier != stored.calendar_identifier:
+            stored.calendar_identifier = resolved_identifier
+            updated = True
+        normalized_recurrence = _normalize_recurrence_value(stored.recurrence_id)
+        if normalized_recurrence != stored.recurrence_id:
+            stored.recurrence_id = normalized_recurrence
+            updated = True
+        if stored.external_id and not normalized_recurrence:
+            stored_occurrence_counts[(resolved_identifier, stored.external_id)] += 1
 
     for calendar in calendars:
         calendar_id_raw = getattr(calendar, "url", None)
@@ -607,10 +638,9 @@ def sync_caldav_events(
         calendar_name = normalize_calendar_identifier(calendar_name_raw)
         if not _calendar_matches_selection(selected, calendar_id, calendar_name):
             continue
-        if calendar_id and calendar_id in normalized_selected:
-            event_calendar_identifier = calendar_id
-        elif calendar_name and calendar_name in normalized_selected:
-            event_calendar_identifier = calendar_name
+        resolved_identifier = _resolve_identifier(calendar_id, calendar_name)
+        if resolved_identifier:
+            event_calendar_identifier = resolved_identifier
         else:
             event_calendar_identifier = calendar_id or calendar_name or "caldav"
         try:
@@ -640,7 +670,8 @@ def sync_caldav_events(
             location = _ical_to_string(vevent.get("location"))
             description = _ical_to_string(vevent.get("description"))
             external_id = _ical_to_string(vevent.get("uid"))
-            recurrence_id = _ical_to_string(vevent.get("recurrence_id"))
+            recurrence_raw = _extract_recurrence_identifier(vevent)
+            recurrence_id = _normalize_recurrence_value(recurrence_raw)
             attendees = _extract_attendees(vevent)
             pending_occurrences.append(
                 {
@@ -715,7 +746,6 @@ def sync_caldav_events(
             continue
         existing_without_uid[key] = stored
 
-    updated = False
     for duplicate in duplicates:
         db.delete(duplicate)
         updated = True
@@ -860,6 +890,67 @@ def sync_caldav_events(
         db.commit()
 
 
+def reconcile_calendar_events(
+    db: Session, selected_calendars: Iterable[str]
+) -> Dict[str, int]:
+    normalized_selection = normalize_calendar_selection(selected_calendars)
+    selection_by_casefold: Dict[str, str] = {}
+    for value in normalized_selection:
+        key = value.casefold()
+        if key not in selection_by_casefold:
+            selection_by_casefold[key] = value
+
+    def _resolve_identifier(identifier: Optional[str]) -> Optional[str]:
+        normalized_identifier = normalize_calendar_identifier(identifier)
+        if not normalized_identifier:
+            return None
+        canonical = selection_by_casefold.get(normalized_identifier.casefold())
+        return canonical or normalized_identifier
+
+    events = db.query(CalendarEvent).order_by(CalendarEvent.id).all()
+    seen_by_uid: Dict[Tuple[Optional[str], str, str], CalendarEvent] = {}
+    changed_ids: Set[int] = set()
+    removed = 0
+
+    for event in events:
+        resolved_identifier = _resolve_identifier(event.calendar_identifier)
+        if resolved_identifier != event.calendar_identifier:
+            event.calendar_identifier = resolved_identifier
+            if event.id is not None:
+                changed_ids.add(event.id)
+
+        normalized_recurrence = _normalize_recurrence_value(event.recurrence_id)
+        if normalized_recurrence != event.recurrence_id:
+            event.recurrence_id = normalized_recurrence
+            if event.id is not None:
+                changed_ids.add(event.id)
+
+        if not event.external_id:
+            continue
+
+        series_key = _calendar_series_key(
+            event.calendar_identifier,
+            event.external_id,
+            event.recurrence_id,
+            event.start_time,
+            use_start_time=True,
+        )
+        if not series_key:
+            continue
+
+        existing = seen_by_uid.get(series_key)
+        if existing and existing.id != event.id:
+            db.delete(event)
+            removed += 1
+            continue
+        seen_by_uid[series_key] = event
+
+    if changed_ids or removed:
+        db.commit()
+
+    return {"updated": len(changed_ids), "removed": removed}
+
+
 def _extract_vevent(component: Any) -> Optional[Any]:
     """Return the VEVENT component from a CalDAV occurrence."""
 
@@ -911,6 +1002,23 @@ def _ical_to_string(value: Any) -> Optional[str]:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="ignore")
     return str(value)
+
+
+def _extract_recurrence_identifier(vevent: Any) -> Optional[str]:
+    if vevent is None:
+        return None
+    getter = getattr(vevent, "get", None)
+    if not callable(getter):
+        return None
+    candidate_keys = ("recurrence_id", "recurrence-id", "RECURRENCE-ID", "RECURRENCE_ID")
+    for key in candidate_keys:
+        try:
+            value = getter(key)
+        except Exception:  # pragma: no cover - defensive guard
+            continue
+        if value is not None:
+            return _ical_to_string(value)
+    return None
 
 
 def _extract_attendees(vevent: Any) -> List[str]:
