@@ -366,6 +366,57 @@ def test_sync_distinguishes_multiple_occurrences_without_recurrence_id(
     assert _naive_utc(stored_events[1].start_time) == second_expected
 
 
+def test_sync_treats_duplicate_recurrence_ids_as_distinct(monkeypatch, session):
+    class DuplicateRecurrenceCalendar:
+        def __init__(self):
+            self.url = "https://example.com/caldav/calendars/personal"
+            self.name = "Personal"
+
+        def date_search(self, *args, **kwargs):
+            start = dt.datetime(2024, 1, 10, 9, tzinfo=dt.timezone.utc)
+            first = FakeOccurrence(
+                "Daily Standup",
+                start,
+                start + dt.timedelta(minutes=30),
+                uid="dup-uid",
+                recurrence_id="duplicate-key",
+            )
+            second_start = start + dt.timedelta(days=2)
+            second = FakeOccurrence(
+                "Daily Standup",
+                second_start,
+                second_start + dt.timedelta(minutes=30),
+                uid="dup-uid",
+                recurrence_id="duplicate-key",
+            )
+            return [first, second]
+
+    calendar = DuplicateRecurrenceCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    state = _prepare_state()
+    services.sync_caldav_events(
+        session, state, dt.date(2024, 1, 10), dt.date(2024, 1, 12)
+    )
+
+    stored_events = (
+        session.query(CalendarEvent)
+        .filter(CalendarEvent.external_id == "dup-uid")
+        .order_by(CalendarEvent.start_time)
+        .all()
+    )
+    assert len(stored_events) == 2
+    expected_starts = [
+        services._ensure_utc(dt.datetime(2024, 1, 10, 9, tzinfo=dt.timezone.utc)),
+        services._ensure_utc(dt.datetime(2024, 1, 12, 9, tzinfo=dt.timezone.utc)),
+    ]
+    assert [
+        _naive_utc(event.start_time)
+        for event in stored_events
+    ] == [_naive_utc(value) for value in expected_starts]
+
+
 def test_sync_preserves_recurring_instances_outside_current_window(monkeypatch, session):
     class WindowedCalendar:
         def __init__(self):

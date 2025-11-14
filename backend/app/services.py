@@ -114,7 +114,7 @@ def _calendar_series_key(
         return None
 
     normalized_recurrence = _normalize_recurrence_value(recurrence_id)
-    if normalized_recurrence:
+    if normalized_recurrence and not use_start_time:
         return (calendar_identifier, external_id, normalized_recurrence)
 
     if not use_start_time:
@@ -646,7 +646,16 @@ def sync_caldav_events(
     pending_occurrences: List[Dict[str, Any]] = []
     multi_occurrence_counts: Dict[Tuple[Optional[str], str], int] = defaultdict(int)
     stored_occurrence_counts: Dict[Tuple[Optional[str], str], int] = defaultdict(int)
+    stored_recurrence_counts: Dict[
+        Tuple[Optional[str], str, str],
+        int,
+    ] = defaultdict(int)
+    pending_recurrence_counts: Dict[
+        Tuple[Optional[str], str, str],
+        int,
+    ] = defaultdict(int)
     recurring_without_ids: Set[Tuple[Optional[str], str]] = set()
+    recurrence_collisions: Set[Tuple[Optional[str], str]] = set()
     updated = False
 
     for stored in existing_records:
@@ -658,8 +667,19 @@ def sync_caldav_events(
         if normalized_recurrence != stored.recurrence_id:
             stored.recurrence_id = normalized_recurrence
             updated = True
-        if stored.external_id and not normalized_recurrence:
-            stored_occurrence_counts[(resolved_identifier, stored.external_id)] += 1
+        identifier_key = stored.calendar_identifier
+        if stored.external_id:
+            if normalized_recurrence:
+                recurrence_key = (
+                    identifier_key,
+                    stored.external_id,
+                    normalized_recurrence,
+                )
+                stored_recurrence_counts[recurrence_key] += 1
+                if stored_recurrence_counts[recurrence_key] > 1:
+                    recurrence_collisions.add((identifier_key, stored.external_id))
+            else:
+                stored_occurrence_counts[(identifier_key, stored.external_id)] += 1
 
     for calendar in calendars:
         calendar_id_raw = getattr(calendar, "url", None)
@@ -749,6 +769,15 @@ def sync_caldav_events(
                 multi_occurrence_counts[(event_calendar_identifier, external_id)] += 1
                 if is_recurring:
                     recurring_without_ids.add((event_calendar_identifier, external_id))
+            if external_id and recurrence_id:
+                recurrence_key = (
+                    event_calendar_identifier,
+                    external_id,
+                    recurrence_id,
+                )
+                pending_recurrence_counts[recurrence_key] += 1
+                if pending_recurrence_counts[recurrence_key] > 1:
+                    recurrence_collisions.add((event_calendar_identifier, external_id))
 
     ambiguous_series_keys: Set[Tuple[Optional[str], str]] = {
         key for key, count in multi_occurrence_counts.items() if count > 1
@@ -757,6 +786,7 @@ def sync_caldav_events(
         key for key, count in stored_occurrence_counts.items() if count > 1
     )
     ambiguous_series_keys.update(recurring_without_ids)
+    ambiguous_series_keys.update(recurrence_collisions)
 
     existing_by_uid: Dict[Tuple[Optional[str], str, str], CalendarEvent] = {}
     existing_without_uid: Dict[
