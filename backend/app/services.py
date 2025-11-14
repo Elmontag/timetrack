@@ -106,23 +106,32 @@ def _calendar_series_key(
     external_id: Optional[str],
     recurrence_id: Optional[str],
     start_time: Optional[dt.datetime],
+    *,
+    use_start_time: bool = False,
 ) -> Optional[Tuple[Optional[str], str, str]]:
     if not external_id:
         return None
 
     normalized_recurrence = (recurrence_id or "").strip()
-    if not normalized_recurrence:
-        if start_time is None:
-            return None
-        if start_time.tzinfo is None:
-            normalized_start = start_time.replace(tzinfo=UTC)
-        else:
-            normalized_start = start_time.astimezone(UTC)
-        normalized_recurrence = (
-            f"__start__:{normalized_start.strftime('%Y%m%dT%H%M%SZ')}"
-        )
+    if normalized_recurrence:
+        return (calendar_identifier, external_id, normalized_recurrence)
 
-    return (calendar_identifier, external_id, normalized_recurrence)
+    if not use_start_time:
+        return (calendar_identifier, external_id, "__root__")
+
+    if start_time is None:
+        return None
+
+    if start_time.tzinfo is None:
+        normalized_start = start_time.replace(tzinfo=UTC)
+    else:
+        normalized_start = start_time.astimezone(UTC)
+
+    return (
+        calendar_identifier,
+        external_id,
+        f"__start__:{normalized_start.strftime('%Y%m%dT%H%M%SZ')}",
+    )
 
 
 def _normalize_note_timestamp(value: Optional[dt.datetime]) -> dt.datetime:
@@ -575,60 +584,16 @@ def sync_caldav_events(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="CalDAV-Anmeldung fehlgeschlagen") from exc
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="CalDAV-Synchronisation fehlgeschlagen") from exc
 
-    existing_by_uid: Dict[Tuple[Optional[str], str, str], CalendarEvent] = {}
-    existing_without_uid: Dict[Tuple[Optional[str], dt.datetime, dt.datetime, str], CalendarEvent] = {}
-    duplicates: List[CalendarEvent] = []
-
     existing_query = db.query(CalendarEvent).filter(
         or_(
             CalendarEvent.calendar_identifier.is_(None),
             CalendarEvent.calendar_identifier.in_(normalized_selected),
         )
     )
+    existing_records = list(existing_query.all())
 
-    for stored in existing_query.all():
-        series_key = _calendar_series_key(
-            stored.calendar_identifier,
-            stored.external_id,
-            stored.recurrence_id,
-            stored.start_time,
-        )
-        if series_key:
-            if series_key in existing_by_uid:
-                duplicates.append(stored)
-                continue
-            existing_by_uid[series_key] = stored
-            continue
-
-        if stored.external_id:
-            # No usable series key -> fall back to comparing by time range/title
-            fallback_key = (
-                stored.calendar_identifier,
-                _ensure_utc(stored.start_time),
-                _ensure_utc(stored.end_time),
-                stored.title,
-            )
-            if fallback_key in existing_without_uid:
-                duplicates.append(stored)
-                continue
-            existing_without_uid[fallback_key] = stored
-            continue
-
-        key = (
-            stored.calendar_identifier,
-            _ensure_utc(stored.start_time),
-            _ensure_utc(stored.end_time),
-            stored.title,
-        )
-        if key in existing_without_uid:
-            duplicates.append(stored)
-            continue
-        existing_without_uid[key] = stored
-
-    updated = False
-    for duplicate in duplicates:
-        db.delete(duplicate)
-        updated = True
+    pending_occurrences: List[Dict[str, Any]] = []
+    multi_occurrence_counts: Dict[Tuple[Optional[str], str], int] = defaultdict(int)
 
     for calendar in calendars:
         calendar_id_raw = getattr(calendar, "url", None)
@@ -672,110 +637,216 @@ def sync_caldav_events(
             external_id = _ical_to_string(vevent.get("uid"))
             recurrence_id = _ical_to_string(vevent.get("recurrence_id"))
             attendees = _extract_attendees(vevent)
-
-            existing_event: Optional[CalendarEvent] = None
-            if external_id:
-                lookup_key = _calendar_series_key(
-                    event_calendar_identifier, external_id, recurrence_id, start_utc
-                )
-                existing_event = existing_by_uid.get(lookup_key) if lookup_key else None
-            else:
-                lookup_key = None
-
-            fallback_key = (
-                event_calendar_identifier,
-                start_utc,
-                end_utc,
-                summary,
+            pending_occurrences.append(
+                {
+                    "calendar_identifier": event_calendar_identifier,
+                    "summary": summary,
+                    "start_utc": start_utc,
+                    "end_utc": end_utc,
+                    "location": location,
+                    "description": description,
+                    "external_id": external_id,
+                    "recurrence_id": recurrence_id,
+                    "attendees": attendees,
+                }
             )
-            if existing_event is None:
-                existing_event = existing_without_uid.get(fallback_key)
 
-            if existing_event is not None:
-                old_fallback_key: Optional[
-                    Tuple[Optional[str], dt.datetime, dt.datetime, str]
-                ] = None
-                if existing_event.external_id is None:
-                    old_fallback_key = (
-                        existing_event.calendar_identifier,
-                        _ensure_utc(existing_event.start_time),
-                        _ensure_utc(existing_event.end_time),
-                        existing_event.title,
-                    )
+            if external_id and not (recurrence_id or "").strip():
+                multi_occurrence_counts[(event_calendar_identifier, external_id)] += 1
 
-                changed = False
-                if existing_event.title != summary:
-                    existing_event.title = summary
-                    changed = True
-                if _ensure_utc(existing_event.start_time) != start_utc:
-                    existing_event.start_time = start_utc
-                    changed = True
-                if _ensure_utc(existing_event.end_time) != end_utc:
-                    existing_event.end_time = end_utc
-                    changed = True
-                if existing_event.location != location:
-                    existing_event.location = location
-                    changed = True
-                if existing_event.description != description:
-                    existing_event.description = description
-                    changed = True
-                if existing_event.calendar_identifier != event_calendar_identifier:
-                    existing_event.calendar_identifier = event_calendar_identifier
-                    changed = True
-                if existing_event.external_id != external_id:
-                    existing_event.external_id = external_id
-                    changed = True
-                if existing_event.recurrence_id != recurrence_id:
-                    existing_event.recurrence_id = recurrence_id
-                    changed = True
-                if existing_event.attendees != attendees:
-                    existing_event.attendees = attendees
-                    changed = True
+    ambiguous_series_keys: Set[Tuple[Optional[str], str]] = {
+        key for key, count in multi_occurrence_counts.items() if count > 1
+    }
 
-                if existing_event.external_id:
-                    new_key = _calendar_series_key(
-                        existing_event.calendar_identifier,
-                        existing_event.external_id,
-                        existing_event.recurrence_id,
-                        existing_event.start_time,
-                    )
-                    if lookup_key and new_key != lookup_key:
-                        existing_by_uid.pop(lookup_key, None)
-                    if new_key:
-                        existing_by_uid[new_key] = existing_event
-                else:
-                    if old_fallback_key and old_fallback_key != fallback_key:
-                        existing_without_uid.pop(old_fallback_key, None)
-                    existing_without_uid[fallback_key] = existing_event
+    existing_by_uid: Dict[Tuple[Optional[str], str, str], CalendarEvent] = {}
+    existing_without_uid: Dict[Tuple[Optional[str], dt.datetime, dt.datetime, str], CalendarEvent] = {}
+    duplicates: List[CalendarEvent] = []
 
-                if changed:
-                    updated = True
+    for stored in existing_records:
+        use_start_time = False
+        if stored.external_id:
+            use_start_time = (
+                stored.calendar_identifier,
+                stored.external_id,
+            ) in ambiguous_series_keys
+        series_key = _calendar_series_key(
+            stored.calendar_identifier,
+            stored.external_id,
+            stored.recurrence_id,
+            stored.start_time,
+            use_start_time=use_start_time,
+        )
+        if series_key:
+            if series_key in existing_by_uid:
+                duplicates.append(stored)
                 continue
+            existing_by_uid[series_key] = stored
+            continue
 
-            event = CalendarEvent(
-                title=summary,
-                start_time=start_utc,
-                end_time=end_utc,
-                location=location,
-                description=description,
-                participated=False,
-                calendar_identifier=event_calendar_identifier,
-                external_id=external_id,
-                recurrence_id=recurrence_id,
-                attendees=attendees,
+        if stored.external_id:
+            fallback_key = (
+                stored.calendar_identifier,
+                _ensure_utc(stored.start_time),
+                _ensure_utc(stored.end_time),
+                stored.title,
             )
-            db.add(event)
-            if external_id:
-                series_key = _calendar_series_key(
-                    event_calendar_identifier, external_id, recurrence_id, start_utc
+            if fallback_key in existing_without_uid:
+                duplicates.append(stored)
+                continue
+            existing_without_uid[fallback_key] = stored
+            continue
+
+        key = (
+            stored.calendar_identifier,
+            _ensure_utc(stored.start_time),
+            _ensure_utc(stored.end_time),
+            stored.title,
+        )
+        if key in existing_without_uid:
+            duplicates.append(stored)
+            continue
+        existing_without_uid[key] = stored
+
+    updated = False
+    for duplicate in duplicates:
+        db.delete(duplicate)
+        updated = True
+
+    for occurrence_data in pending_occurrences:
+        event_calendar_identifier = occurrence_data["calendar_identifier"]
+        summary = occurrence_data["summary"]
+        start_utc = occurrence_data["start_utc"]
+        end_utc = occurrence_data["end_utc"]
+        location = occurrence_data["location"]
+        description = occurrence_data["description"]
+        external_id = occurrence_data["external_id"]
+        recurrence_id = occurrence_data["recurrence_id"]
+        attendees = occurrence_data["attendees"]
+
+        use_start_time = False
+        existing_event: Optional[CalendarEvent] = None
+        lookup_key: Optional[Tuple[Optional[str], str, str]] = None
+        if external_id:
+            use_start_time = (
+                event_calendar_identifier,
+                external_id,
+            ) in ambiguous_series_keys
+            lookup_key = _calendar_series_key(
+                event_calendar_identifier,
+                external_id,
+                recurrence_id,
+                start_utc,
+                use_start_time=use_start_time,
+            )
+            existing_event = existing_by_uid.get(lookup_key) if lookup_key else None
+
+        fallback_key = (
+            event_calendar_identifier,
+            start_utc,
+            end_utc,
+            summary,
+        )
+        if existing_event is None:
+            existing_event = existing_without_uid.get(fallback_key)
+
+        if existing_event is not None:
+            old_fallback_key: Optional[
+                Tuple[Optional[str], dt.datetime, dt.datetime, str]
+            ] = None
+            if existing_event.external_id is None:
+                old_fallback_key = (
+                    existing_event.calendar_identifier,
+                    _ensure_utc(existing_event.start_time),
+                    _ensure_utc(existing_event.end_time),
+                    existing_event.title,
                 )
-                if series_key:
-                    existing_by_uid[series_key] = event
-                else:
-                    existing_without_uid[fallback_key] = event
+
+            changed = False
+            if existing_event.title != summary:
+                existing_event.title = summary
+                changed = True
+            if _ensure_utc(existing_event.start_time) != start_utc:
+                existing_event.start_time = start_utc
+                changed = True
+            if _ensure_utc(existing_event.end_time) != end_utc:
+                existing_event.end_time = end_utc
+                changed = True
+            if existing_event.location != location:
+                existing_event.location = location
+                changed = True
+            if existing_event.description != description:
+                existing_event.description = description
+                changed = True
+            if existing_event.calendar_identifier != event_calendar_identifier:
+                existing_event.calendar_identifier = event_calendar_identifier
+                changed = True
+            if existing_event.external_id != external_id:
+                existing_event.external_id = external_id
+                changed = True
+            if existing_event.recurrence_id != recurrence_id:
+                existing_event.recurrence_id = recurrence_id
+                changed = True
+            if existing_event.attendees != attendees:
+                existing_event.attendees = attendees
+                changed = True
+
+            if existing_event.external_id:
+                updated_use_start = (
+                    existing_event.calendar_identifier,
+                    existing_event.external_id,
+                ) in ambiguous_series_keys
+                new_key = _calendar_series_key(
+                    existing_event.calendar_identifier,
+                    existing_event.external_id,
+                    existing_event.recurrence_id,
+                    existing_event.start_time,
+                    use_start_time=updated_use_start,
+                )
+                if lookup_key and new_key != lookup_key:
+                    existing_by_uid.pop(lookup_key, None)
+                if new_key:
+                    existing_by_uid[new_key] = existing_event
+            else:
+                if old_fallback_key and old_fallback_key != fallback_key:
+                    existing_without_uid.pop(old_fallback_key, None)
+                existing_without_uid[fallback_key] = existing_event
+
+            if changed:
+                updated = True
+            continue
+
+        event = CalendarEvent(
+            title=summary,
+            start_time=start_utc,
+            end_time=end_utc,
+            location=location,
+            description=description,
+            participated=False,
+            calendar_identifier=event_calendar_identifier,
+            external_id=external_id,
+            recurrence_id=recurrence_id,
+            attendees=attendees,
+        )
+        db.add(event)
+        if external_id:
+            use_start_time_for_new = (
+                event_calendar_identifier,
+                external_id,
+            ) in ambiguous_series_keys
+            series_key = _calendar_series_key(
+                event_calendar_identifier,
+                external_id,
+                recurrence_id,
+                start_utc,
+                use_start_time=use_start_time_for_new,
+            )
+            if series_key:
+                existing_by_uid[series_key] = event
             else:
                 existing_without_uid[fallback_key] = event
-            updated = True
+        else:
+            existing_without_uid[fallback_key] = event
+        updated = True
 
     if updated:
         db.commit()
