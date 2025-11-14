@@ -640,7 +640,7 @@ def sync_caldav_events(
             location = _ical_to_string(vevent.get("location"))
             description = _ical_to_string(vevent.get("description"))
             external_id = _ical_to_string(vevent.get("uid"))
-            recurrence_id = _ical_to_string(vevent.get("recurrence_id"))
+            recurrence_id = _extract_recurrence_id(vevent)
             attendees = _extract_attendees(vevent)
             pending_occurrences.append(
                 {
@@ -911,6 +911,44 @@ def _ical_to_string(value: Any) -> Optional[str]:
     if isinstance(value, bytes):
         return value.decode("utf-8", errors="ignore")
     return str(value)
+
+
+def _extract_recurrence_id(vevent: Any) -> Optional[str]:
+    if vevent is None:
+        return None
+
+    candidates = ("recurrence_id", "recurrence-id", "RECURRENCE-ID")
+    getter = getattr(vevent, "get", None)
+
+    for key in candidates:
+        value: Any = None
+        if callable(getter):
+            try:
+                value = getter(key)
+            except Exception:  # pragma: no cover - defensive guard
+                value = None
+        if value is None:
+            value = getattr(vevent, key, None)
+        if value is not None:
+            rendered = _ical_to_string(value)
+            if rendered:
+                return rendered
+
+    property_items = getattr(vevent, "property_items", None)
+    if callable(property_items):
+        try:
+            for name, value in property_items():
+                if not name:
+                    continue
+                normalized = str(name).casefold().replace("-", "_")
+                if normalized == "recurrence_id" and value is not None:
+                    rendered = _ical_to_string(value)
+                    if rendered:
+                        return rendered
+        except Exception:  # pragma: no cover - defensive guard
+            return None
+
+    return None
 
 
 def _extract_attendees(vevent: Any) -> List[str]:

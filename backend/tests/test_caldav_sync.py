@@ -37,6 +37,7 @@ class FakeVEvent:
         uid: str | None = None,
         attendees: list[Any] | None = None,
         recurrence_id: str | None = None,
+        recurrence_field: str = "recurrence_id",
     ):
         self._data = {
             "summary": summary,
@@ -50,7 +51,7 @@ class FakeVEvent:
         if attendees:
             self._data["attendee"] = attendees
         if recurrence_id:
-            self._data["recurrence_id"] = recurrence_id
+            self._data[recurrence_field] = recurrence_id
         self.name = "VEVENT"
 
     def get(self, key: str):  # pragma: no cover - defensive fallback
@@ -66,8 +67,18 @@ class FakeComponent:
         *,
         uid: str | None = None,
         attendees: list[Any] | None = None,
+        recurrence_id: str | None = None,
+        recurrence_field: str = "recurrence_id",
     ):
-        self.vevent = FakeVEvent(summary, start, end, uid=uid, attendees=attendees)
+        self.vevent = FakeVEvent(
+            summary,
+            start,
+            end,
+            uid=uid,
+            attendees=attendees,
+            recurrence_id=recurrence_id,
+            recurrence_field=recurrence_field,
+        )
 
 
 class FakeOccurrence:
@@ -79,8 +90,18 @@ class FakeOccurrence:
         *,
         uid: str | None = None,
         attendees: list[Any] | None = None,
+        recurrence_id: str | None = None,
+        recurrence_field: str = "recurrence_id",
     ):
-        self.icalendar_component = FakeComponent(summary, start, end, uid=uid, attendees=attendees)
+        self.icalendar_component = FakeComponent(
+            summary,
+            start,
+            end,
+            uid=uid,
+            attendees=attendees,
+            recurrence_id=recurrence_id,
+            recurrence_field=recurrence_field,
+        )
 
 
 class StandaloneVEvent:
@@ -285,6 +306,57 @@ def test_sync_distinguishes_multiple_occurrences_without_recurrence_id(
     second_expected = _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 7, 8)))
     assert _naive_utc(stored_events[0].start_time) == first_expected
     assert _naive_utc(stored_events[1].start_time) == second_expected
+
+
+def test_sync_recognizes_recurrence_id_variants(monkeypatch, session):
+    class VariantCalendar:
+        def __init__(self):
+            self.url = "https://example.com/caldav/calendars/personal"
+            self.name = "Personal"
+
+        def date_search(self, *args, **kwargs):
+            base = dt.datetime(2024, 1, 8, 6)
+            return [
+                FakeOccurrence(
+                    "Gym",
+                    base,
+                    base + dt.timedelta(hours=1),
+                    uid="series-variant",
+                    recurrence_id="20240108T060000Z",
+                    recurrence_field="RECURRENCE-ID",
+                ),
+                FakeOccurrence(
+                    "Gym",
+                    base + dt.timedelta(days=1),
+                    base + dt.timedelta(days=1, hours=1),
+                    uid="series-variant",
+                    recurrence_id="20240109T060000Z",
+                    recurrence_field="recurrence-id",
+                ),
+            ]
+
+    calendar = VariantCalendar()
+    client = FakeClient([calendar])
+    monkeypatch.setattr(services, "_build_caldav_client", lambda state, strict=False: client)
+
+    state = _prepare_state()
+    services.sync_caldav_events(
+        session, state, dt.date(2024, 1, 8), dt.date(2024, 1, 9)
+    )
+
+    stored_events = (
+        session.query(CalendarEvent)
+        .filter(CalendarEvent.external_id == "series-variant")
+        .order_by(CalendarEvent.start_time)
+        .all()
+    )
+
+    assert len(stored_events) == 2
+    starts = [_naive_utc(event.start_time) for event in stored_events]
+    assert starts == [
+        _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 8, 6))),
+        _naive_utc(services._ensure_utc(dt.datetime(2024, 1, 9, 6))),
+    ]
 
 
 def test_sync_preserves_recurring_instances_outside_current_window(monkeypatch, session):
