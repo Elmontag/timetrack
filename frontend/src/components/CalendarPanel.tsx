@@ -714,6 +714,7 @@ export function CalendarPanel({ refreshKey }: Props) {
           }
         }}
         title="Kalendereintrag löschen"
+        zIndexClassName="z-[60]"
         footer={
           <>
             <button
