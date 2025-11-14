@@ -101,6 +101,30 @@ def _ensure_utc(value: dt.datetime) -> dt.datetime:
     return value.astimezone(UTC)
 
 
+def _calendar_series_key(
+    calendar_identifier: Optional[str],
+    external_id: Optional[str],
+    recurrence_id: Optional[str],
+    start_time: Optional[dt.datetime],
+) -> Optional[Tuple[Optional[str], str, str]]:
+    if not external_id:
+        return None
+
+    normalized_recurrence = (recurrence_id or "").strip()
+    if not normalized_recurrence:
+        if start_time is None:
+            return None
+        if start_time.tzinfo is None:
+            normalized_start = start_time.replace(tzinfo=UTC)
+        else:
+            normalized_start = start_time.astimezone(UTC)
+        normalized_recurrence = (
+            f"__start__:{normalized_start.strftime('%Y%m%dT%H%M%SZ')}"
+        )
+
+    return (calendar_identifier, external_id, normalized_recurrence)
+
+
 def _normalize_note_timestamp(value: Optional[dt.datetime]) -> dt.datetime:
     if value is None:
         return _now()
@@ -551,7 +575,7 @@ def sync_caldav_events(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="CalDAV-Anmeldung fehlgeschlagen") from exc
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="CalDAV-Synchronisation fehlgeschlagen") from exc
 
-    existing_by_uid: Dict[Tuple[Optional[str], Optional[str], Optional[str]], CalendarEvent] = {}
+    existing_by_uid: Dict[Tuple[Optional[str], str, str], CalendarEvent] = {}
     existing_without_uid: Dict[Tuple[Optional[str], dt.datetime, dt.datetime, str], CalendarEvent] = {}
     duplicates: List[CalendarEvent] = []
 
@@ -563,27 +587,43 @@ def sync_caldav_events(
     )
 
     for stored in existing_query.all():
-        if stored.external_id:
-            key = (
-                stored.calendar_identifier,
-                stored.external_id,
-                stored.recurrence_id or "",
-            )
-            if key in existing_by_uid:
+        series_key = _calendar_series_key(
+            stored.calendar_identifier,
+            stored.external_id,
+            stored.recurrence_id,
+            stored.start_time,
+        )
+        if series_key:
+            if series_key in existing_by_uid:
                 duplicates.append(stored)
                 continue
-            existing_by_uid[key] = stored
-        else:
-            key = (
+            existing_by_uid[series_key] = stored
+            continue
+
+        if stored.external_id:
+            # No usable series key -> fall back to comparing by time range/title
+            fallback_key = (
                 stored.calendar_identifier,
                 _ensure_utc(stored.start_time),
                 _ensure_utc(stored.end_time),
                 stored.title,
             )
-            if key in existing_without_uid:
+            if fallback_key in existing_without_uid:
                 duplicates.append(stored)
                 continue
-            existing_without_uid[key] = stored
+            existing_without_uid[fallback_key] = stored
+            continue
+
+        key = (
+            stored.calendar_identifier,
+            _ensure_utc(stored.start_time),
+            _ensure_utc(stored.end_time),
+            stored.title,
+        )
+        if key in existing_without_uid:
+            duplicates.append(stored)
+            continue
+        existing_without_uid[key] = stored
 
     updated = False
     for duplicate in duplicates:
@@ -635,9 +675,12 @@ def sync_caldav_events(
 
             existing_event: Optional[CalendarEvent] = None
             if external_id:
-                existing_event = existing_by_uid.get(
-                    (event_calendar_identifier, external_id, recurrence_id or "")
+                lookup_key = _calendar_series_key(
+                    event_calendar_identifier, external_id, recurrence_id, start_utc
                 )
+                existing_event = existing_by_uid.get(lookup_key) if lookup_key else None
+            else:
+                lookup_key = None
 
             fallback_key = (
                 event_calendar_identifier,
@@ -690,12 +733,16 @@ def sync_caldav_events(
                     changed = True
 
                 if existing_event.external_id:
-                    key = (
+                    new_key = _calendar_series_key(
                         existing_event.calendar_identifier,
                         existing_event.external_id,
-                        existing_event.recurrence_id or "",
+                        existing_event.recurrence_id,
+                        existing_event.start_time,
                     )
-                    existing_by_uid[key] = existing_event
+                    if lookup_key and new_key != lookup_key:
+                        existing_by_uid.pop(lookup_key, None)
+                    if new_key:
+                        existing_by_uid[new_key] = existing_event
                 else:
                     if old_fallback_key and old_fallback_key != fallback_key:
                         existing_without_uid.pop(old_fallback_key, None)
@@ -719,8 +766,13 @@ def sync_caldav_events(
             )
             db.add(event)
             if external_id:
-                key = (event_calendar_identifier, external_id, recurrence_id or "")
-                existing_by_uid[key] = event
+                series_key = _calendar_series_key(
+                    event_calendar_identifier, external_id, recurrence_id, start_utc
+                )
+                if series_key:
+                    existing_by_uid[series_key] = event
+                else:
+                    existing_without_uid[fallback_key] = event
             else:
                 existing_without_uid[fallback_key] = event
             updated = True

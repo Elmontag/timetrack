@@ -8,13 +8,27 @@ interface LightboxProps {
   children: ReactNode
   footer?: ReactNode
   contentClassName?: string
+  zIndexClassName?: string
 }
 
-export function Lightbox({ open, title, onClose, children, footer, contentClassName }: LightboxProps) {
+export function Lightbox({
+  open,
+  title,
+  onClose,
+  children,
+  footer,
+  contentClassName,
+  zIndexClassName,
+}: LightboxProps) {
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-950/80 px-4 py-8 backdrop-blur-sm">
+    <div
+      className={clsx(
+        'fixed inset-0 flex items-center justify-center overflow-y-auto bg-slate-950/80 px-4 py-8 backdrop-blur-sm',
+        zIndexClassName ?? 'z-50',
+      )}
+    >
       <div
         className="flex w-full max-w-2xl flex-col rounded-2xl border border-slate-800 bg-slate-950/90 p-6 shadow-2xl"
         style={{ maxHeight: 'min(36rem, calc(100vh - 4rem))' }}
